@@ -1,0 +1,17 @@
+{
+  "name": "@wabot/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:ui && npm run build:worker",
+    "build:ui": "vite build",
+    "build:worker": "wrangler deploy --dry-run --outdir dist/worker --config ../../wrangler.jsonc",
+    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.ui.json --noEmit",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "hono": "^4.13.17",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}

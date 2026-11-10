@@ -1,0 +1,803 @@
+{
+  "project": "Wabot",
+  "branchName": "ralph/wabot-mvp",
+  "description": "Wabot MVP: bot grup WhatsApp dengan Baileys pair code, dashboard Worker, D1, dan R2. Mencakup P0 dan P1 poll, sticker, games, scheduler, serta live log.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Scaffold monorepo dan typecheck",
+      "description": "Sebagai developer, saya perlu fondasi monorepo agar semua paket Wabot bisa dikembangkan dan diverifikasi dengan satu perintah.",
+      "acceptanceCriteria": [
+        "Root package.json memakai npm workspaces: apps/* dan packages/*.",
+        "Script root tersedia: typecheck, test, build, dev:web, dan dev:bot.",
+        "TypeScript strict dengan tsconfig base dan tsconfig per paket.",
+        "Entry placeholder apps/web, apps/bot, dan packages/shared ada serta saling mengimpor tipe.",
+        "npm install, npm run typecheck, dan npm test lulus.",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Kontrak data bersama dan validasi",
+      "description": "Sebagai developer, saya perlu schema bersama agar payload API dan bot konsisten sejak awal.",
+      "acceptanceCriteria": [
+        "Schema zod untuk phone E.164 tanpa tanda plus, JID, settings patch, pair request, XP batch, event batch, dan envelope API.",
+        "Validasi menolak spasi, tanda plus, field settings yang tidak dikenal, dan nilai di luar batas.",
+        "Unit test valid dan invalid untuk setiap schema.",
+        "npm test lulus.",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Migrasi skema D1",
+      "description": "Sebagai developer, saya perlu skema D1 lengkap agar penyimpanan status bot, grup, dan aktivitas siap dipakai.",
+      "acceptanceCriteria": [
+        "migrations/0001_init.sql membuat 10 tabel PRD §6: bots, pair_requests, groups, group_settings, members, commands, audit_log, events, media_files, dan daily_stats.",
+        "Index idx_pair_status, idx_pair_open (partial unik), idx_groups_active, idx_members_xp, idx_cmd_unique, idx_audit_group, dan idx_events_time dibuat.",
+        "Semua DDL memakai IF NOT EXISTS dan PRAGMA foreign_keys.",
+        "npm run db:migrate:local berhasil dua kali berturut-turut.",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Penyimpanan rate limit",
+      "description": "Sebagai developer, saya perlu rate limit yang bertahan lintas isolate agar login dan pairing tidak bisa dibanjiri.",
+      "acceptanceCriteria": [
+        "migrations/0002_auth_rate_limits.sql menambah tabel rate_limits dengan key, window_start, count, dan expires_at.",
+        "Helper consumeRateLimit(db, key, limit, windowMs, now) mengembalikan allowed, remaining, dan resetAt.",
+        "Window deterministik dan entri kedaluwarsa dibersihkan.",
+        "Unit test dengan fake clock mencakup batas, penolakan, dan reset.",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Kerangka Worker dan health check",
+      "description": "Sebagai developer, saya perlu Worker dasar dengan envelope response dan header keamanan sebelum menambah endpoint.",
+      "acceptanceCriteria": [
+        "Worker Hono di apps/web/src/worker.ts dengan route GET /api/health.",
+        "Response memakai envelope {ok, data} atau {ok, error} dengan status code tepat.",
+        "Route /api/* mengirim Cache-Control: no-store dan 404 API tetap JSON.",
+        "Header X-Content-Type-Options, Referrer-Policy, dan CSP dasar terpasang.",
+        "Unit test app.request untuk health, 404, dan header.",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Kriptografi sesi dan password",
+      "description": "Sebagai developer, saya perlu primitif autentikasi yang aman agar dashboard tidak menyimpan password atau sesi dalam bentuk lemah.",
+      "acceptanceCriteria": [
+        "Hash password PBKDF2-SHA256 minimal 100.000 iterasi, salt acak 16 byte, format pbkdf2$iterasi$salt$hash.",
+        "verifyPassword memakai perbandingan constant-time.",
+        "Session token berisi exp dan HMAC-SHA256; verifikasi menolak token kedaluwarsa atau berubah.",
+        "CSRF token acak base64url minimal 16 byte, disimpan di payload sesi.",
+        "Unit test hash/verify, tamper, expiry, dan CSRF.",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Endpoint login, logout, dan sesi",
+      "description": "Sebagai pengguna, saya ingin masuk dengan password agar dapat mengelola bot tanpa membuka API ke publik.",
+      "acceptanceCriteria": [
+        "POST /api/auth/login memverifikasi password dan mengembalikan CSRF token.",
+        "Cookie wabot_session HttpOnly, Secure, SameSite=Lax, Max-Age 7 hari, Path=/.",
+        "Password salah menghasilkan 401 generik; percobaan ke-6 per IP per menit menghasilkan 429.",
+        "POST /api/auth/logout menghapus cookie; GET /api/session mengembalikan sesi valid atau 401.",
+        "Unit test login sukses/gagal, rate limit, logout, dan cookie flags.",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Middleware CSRF, same-origin, dan Bearer bot",
+      "description": "Sebagai developer, saya perlu memisahkan akses dashboard dan bot agar setiap mutasi terautentikasi dengan benar.",
+      "acceptanceCriteria": [
+        "Middleware menolak POST/PATCH/PUT/DELETE tanpa Origin same-origin atau X-CSRF-Token valid dengan 403.",
+        "Middleware /api/bot/* menerima Authorization Bearer key aktif atau key sebelumnya; selain itu 401.",
+        "Route bot tidak mengirim header CORS.",
+        "Unit test foreign Origin, CSRF hilang/salah, Bearer hilang/salah, dan key lama.",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Middleware CSRF, same-origin, dan Bearer bot teruji (foreign Origin 403, CSRF hilang/salah 403, Bearer hilang/salah/tidak dikonfigurasi 401, key aktif+previous 200). Typecheck lulus."
+    },
+    {
+      "id": "US-009",
+      "title": "Bootstrap baris bot dan repository",
+      "description": "Sebagai developer, saya perlu satu sumber status bot agar dashboard dan daemon membaca data yang sama.",
+      "acceptanceCriteria": [
+        "Bootstrap memastikan tepat satu baris bots dengan id dari env BOT_ID atau bot_1.",
+        "Repository menyediakan getBot, updateBotStatus, dan maskPhone.",
+        "Status bot mengikuti PRD §6: unpaired, pairing, connected, disconnected, logged_out, atau error.",
+        "Tidak ada kolom kredensial Baileys di D1.",
+        "Unit test bootstrap idempoten, transisi status, dan masking.",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "API permintaan pairing",
+      "description": "Sebagai pengguna, saya ingin mengajukan pair request dari dashboard agar bot bisa ditautkan tanpa QR.",
+      "acceptanceCriteria": [
+        "POST /api/pair-requests memvalidasi nomor digit 8-15, membuat id acak, status pending, dan expires_at 10 menit.",
+        "Maksimal 3 permintaan per 15 menit per bot (429 pairing_rate_limited) dan cooldown 30 detik; permintaan open kedua ditolak 409 pairing_in_progress.",
+        "GET mengembalikan status, nomor ter-mask, dan kode hanya saat code_ready.",
+        "POST /api/pair-requests/:id/cancel membatalkan permintaan non-final dan mengubah status menjadi cancelled.",
+        "Unit test validasi, rate limit, duplikat, dan masking.",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "POST /api/pair-requests teruji: validasi nomor, rate limit 3/15menit + cooldown 30 detik, duplikat open 409, masking nomor, cancel. Typecheck lulus."
+    },
+    {
+      "id": "US-011",
+      "title": "API transisi status pairing untuk bot",
+      "description": "Sebagai daemon, saya perlu mengklaim permintaan dan melaporkan kode serta status agar dashboard menampilkan progres nyata.",
+      "acceptanceCriteria": [
+        "POST /api/bot/pair-requests/claim mengambil satu permintaan pending, mengubahnya menjadi dispatched, dan menambah attempts.",
+        "POST /api/bot/pair-requests/:id/code menyimpan kode 8 digit, status code_ready, dan expires_at 120 detik.",
+        "POST /api/bot/pair-requests/:id/status menerima connected atau failed; connected mengosongkan kode dan memperbarui bots.status, paired_at, dan phone_jid.",
+        "Permintaan kedaluwarsa menjadi expired dan tidak bisa diklaim.",
+        "Unit test transisi legal, transisi ilegal, dan expiry.",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "POST /api/bot/pair-requests/claim, /code, /status teruji: klaim pending→dispatched, kode 8 digit code_ready exp 120s, connected/failed, expired tidak bisa diklaim, transisi ilegal 409, kode disembunyikan. Typecheck lulus."
+    },
+    {
+      "id": "US-012",
+      "title": "API statistik harian bot",
+      "description": "Sebagai dashboard, saya perlu angka pesan, command, dan anggota aktif per hari agar ringkasan tidak dihitung ulang dari log mentah.",
+      "acceptanceCriteria": [
+        "Endpoint internal bot menaikkan messages_in, commands_used, active_groups, dan active_members pada daily_stats untuk stat_date dan bot_id (tambahan sesuai ADR-4, bukan bagian §7.3).",
+        "Upsert unik pada (bot_id, date) dan menolak angka negatif.",
+        "GET /api/bot/stats?days=7 mengembalikan seri harian berurutan untuk sparkline dashboard.",
+        "Unit test upsert, increment, validasi, dan seri.",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "API ringkasan overview",
+      "description": "Sebagai pengguna, saya ingin satu endpoint ringkasan agar halaman utama cepat dimuat.",
+      "acceptanceCriteria": [
+        "GET /api/overview mengembalikan status bot, last_seen, groups_count, messages_today, commands_today, kuota, dan seri 7 hari.",
+        "Status offline jika heartbeat lebih dari 90 detik.",
+        "Data kosong mengembalikan nol dan array kosong, bukan error.",
+        "Unit test online/offline dan data kosong.",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "API grup dan pengaturan grup",
+      "description": "Sebagai pengguna, saya ingin melihat dan mengubah pengaturan per grup agar bot mengikuti aturan masing-masing.",
+      "acceptanceCriteria": [
+        "GET /api/groups mendukung q dan active; GET /api/groups/:jid mengembalikan detail dan settings.",
+        "PATCH /api/groups/:jid/settings hanya menerima field allowlist, validasi zod, dan menolak field asing 400.",
+        "Setiap perubahan menulis audit_logs dengan actor, action, target, dan timestamp.",
+        "Grup tidak dikenal menghasilkan 404.",
+        "Unit test list, patch valid/invalid, audit, dan 404.",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "API anggota dan leaderboard",
+      "description": "Sebagai pengguna, saya ingin melihat anggota dan peringkat XP tanpa membocorkan data grup lain.",
+      "acceptanceCriteria": [
+        "GET /api/groups/:jid/members mendukung sort xp, level, atau last_active dan limit maksimal 100.",
+        "GET /api/groups/:jid/leaderboard mengembalikan top 10 dengan peringkat.",
+        "Query selalu dibatasi group_id sehingga data grup lain tidak bocor.",
+        "Unit test urutan, limit, dan isolasi grup.",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "CRUD command kustom",
+      "description": "Sebagai pengguna, saya ingin menambah command global atau per grup agar bot bisa disesuaikan.",
+      "acceptanceCriteria": [
+        "GET/POST /api/groups/:jid/commands dan PATCH/DELETE /api/commands/:id tersedia.",
+        "Trigger dinormalisasi lowercase tanpa prefix dan unik per grup; duplikat 409.",
+        "Command global (group_id null) dan khusus grup didukung.",
+        "Validasi response maksimal 2000 karakter dan trigger 1-32 karakter.",
+        "Unit test CRUD, duplikat, validasi, dan scope.",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "API log event dan audit",
+      "description": "Sebagai pengguna, saya ingin menelusuri aktivitas bot tanpa melihat data pribadi mentah.",
+      "acceptanceCriteria": [
+        "GET /api/events mendukung level, scope, limit maksimal 200, dan urutan terbaru.",
+        "GET /api/groups/:jid/audit mengembalikan maksimal 100 baris.",
+        "Response tidak memuat nomor telepon lengkap, kode pairing, atau isi pesan.",
+        "Unit test filter, limit, urutan, dan redaksi.",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Upload media ke R2",
+      "description": "Sebagai pengguna, saya ingin mengunggah gambar untuk konten bot dengan validasi tipe dan ukuran.",
+      "acceptanceCriteria": [
+        "POST /api/media menerima multipart maksimal 2 MB dan hanya image/png, image/jpeg, atau image/webp.",
+        "Validasi magic bytes, bukan hanya Content-Type; file lebih besar 413 dan tipe salah 415.",
+        "Simpan ke R2 dengan key acak dan catat media_files; GET /api/media/:id mengembalikan metadata.",
+        "Nama file dari klien tidak dipakai sebagai key.",
+        "Unit test ukuran, tipe, magic bytes, dan metadata dengan R2 mock.",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Arah desain dashboard",
+      "description": "Sebagai developer, saya perlu arah desain tertulis agar UI tidak menjadi template generik.",
+      "acceptanceCriteria": [
+        "Buat DESIGN.md berisi identitas produk, palet maksimal 3 warna plus aksen, tipografi beralasan, dan token CSS.",
+        "Tetapkan dial ENERGY, RHYTHM, dan MOTION beserta konsekuensi layout serta animasi.",
+        "Tetapkan aturan dark mode, state loading/empty/error, dan perilaku di 360px.",
+        "Larangan eksplisit: data palsu, testimoni karangan, gradient ungu-biru generik, dan emoji sebagai ikon.",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Kerangka dashboard dan app shell",
+      "description": "Sebagai pengguna, saya ingin navigasi dashboard yang konsisten di desktop dan ponsel.",
+      "acceptanceCriteria": [
+        "Dashboard React dan Vite di apps/web/ui dengan route /login, /, /pair, /groups, /groups/:jid, /commands, /logs, dan /settings.",
+        "App shell punya navigasi, indikator halaman aktif, dark mode, dan layout tanpa overflow di 360px.",
+        "Komponen Loading, Empty, dan Error konsisten dan dapat dipakai ulang.",
+        "npm run build dan npm run typecheck lulus.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "Halaman login",
+      "description": "Sebagai pengguna, saya ingin masuk dengan password dan mendapat pesan yang jelas saat gagal.",
+      "acceptanceCriteria": [
+        "Halaman login mengirim password ke API, menampilkan error generik, dan menonaktifkan tombol saat submit.",
+        "Sukses menyimpan sesi melalui cookie dan redirect ke /.",
+        "Status 429 menampilkan pesan coba lagi, bukan error mentah.",
+        "Form punya label, autocomplete current-password, dan fokus awal.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-022",
+      "title": "Halaman overview",
+      "description": "Sebagai pengguna, saya ingin melihat kondisi bot dan aktivitas tujuh hari terakhir dalam satu layar.",
+      "acceptanceCriteria": [
+        "Overview menampilkan kartu status, grup, pesan hari ini, command hari ini, dan sparkline 7 hari dari API.",
+        "Banner offline muncul jika heartbeat basi; tidak ada angka karangan saat data kosong.",
+        "Navigasi ke pairing, grup, dan log berfungsi.",
+        "Layout rapi di 360px dan dark mode.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "Wizard pairing nomor",
+      "description": "Sebagai pengguna, saya ingin menautkan WhatsApp dengan kode pairing tanpa memindai QR.",
+      "acceptanceCriteria": [
+        "Wizard tiga langkah: nomor, konfirmasi disclaimer, dan kode pairing.",
+        "Kode ditampilkan monospace besar, countdown 120 detik, tombol copy, cancel, dan retry.",
+        "Polling status berhenti saat connected atau expired dan menampilkan pesan jelas.",
+        "Disclaimer menyebut risiko penggunaan tidak resmi dan kotak setuju wajib dicentang.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-024",
+      "title": "Daftar grup",
+      "description": "Sebagai pengguna, saya ingin menemukan grup yang dikelola bot dengan cepat.",
+      "acceptanceCriteria": [
+        "Daftar grup menampilkan nama, JID ter-mask, status aktif, jumlah anggota, dan pencarian.",
+        "Filter aktif/nonaktif dan empty state tanpa data palsu.",
+        "Klik baris membuka detail grup.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "Tab pengaturan grup",
+      "description": "Sebagai admin grup, saya ingin mengubah sapaan, moderasi, dan XP sesuai kebutuhan grup.",
+      "acceptanceCriteria": [
+        "Tab Umum, Penyambutan, Moderasi, dan XP memuat settings dari API.",
+        "Form welcome/goodbye punya preview variabel {nama}, {grup}, dan {tanggal} serta validasi 1000 karakter.",
+        "Simpan menampilkan sukses atau gagal, field invalid ditandai, dan perubahan tercermin setelah reload.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-026",
+      "title": "Tab data grup",
+      "description": "Sebagai pengguna, saya ingin melihat anggota, command, dan audit grup di satu tempat.",
+      "acceptanceCriteria": [
+        "Tab Anggota menampilkan tabel dengan sort XP, level, dan aktif dari API.",
+        "Tab Command menampilkan daftar command grup; tab Audit menampilkan log.",
+        "Setiap tab punya loading, empty, dan error state.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-027",
+      "title": "Halaman command",
+      "description": "Sebagai pengguna, saya ingin mengelola command kustom tanpa mengedit database.",
+      "acceptanceCriteria": [
+        "Halaman command menampilkan command global dan per grup.",
+        "Form create/edit mendukung trigger, response, scope, dan enabled; duplikat 409 tampil inline.",
+        "Hapus meminta konfirmasi dan memperbarui daftar.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-028",
+      "title": "Halaman log",
+      "description": "Sebagai pengguna, saya ingin memfilter dan mengunduh log untuk investigasi.",
+      "acceptanceCriteria": [
+        "Halaman log memfilter level dan scope, refresh manual, dan menampilkan waktu relatif.",
+        "Tombol unduh menghasilkan JSON 100 baris terbaru.",
+        "Tidak ada nomor lengkap, kode pairing, atau isi pesan di tampilan maupun unduhan.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-029",
+      "title": "Halaman pengaturan bot",
+      "description": "Sebagai pengguna, saya ingin merotasi API key dan memutus sesi bot dengan aman.",
+      "acceptanceCriteria": [
+        "Halaman settings menampilkan info bot, status, versi, dan last seen.",
+        "Rotasi API key menampilkan key baru sekali dengan peringatan dan tidak menyimpannya di localStorage.",
+        "Logout bot meminta konfirmasi dan memanggil endpoint; disclaimer penggunaan tidak resmi tampil.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-030",
+      "title": "Fondasi daemon Baileys",
+      "description": "Sebagai developer, saya perlu koneksi WhatsApp yang tahan putus dan menyimpan kredensial secara atomik.",
+      "acceptanceCriteria": [
+        "Socket Baileys dibuat dengan printQRInTerminal false dan auth state atomik yang menulis file tmp lalu rename.",
+        "Reconnect exponential backoff 2-60 detik dengan jitter; loggedOut menghapus kredensial.",
+        "Heartbeat 30 detik mengirim status ke Worker dan berhenti saat socket tertutup.",
+        "Env divalidasi saat start; tidak ada kredensial di D1.",
+        "Unit test backoff, auth state atomik, dan validasi env.",
+        "Typecheck passes"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-031",
+      "title": "Alur pairing di daemon",
+      "description": "Sebagai pengguna, saya ingin kode pairing muncul setelah permintaan diklaim oleh daemon.",
+      "acceptanceCriteria": [
+        "Daemon mengklaim pair request setiap 3 detik dan menolak jika sesi sudah aktif.",
+        "Setelah socket connecting, panggil requestPairingCode dan laporkan kode serta status.",
+        "Tangani 515 dengan reconnect dan loggedOut dengan status logged_out.",
+        "Tidak menampilkan QR dan tidak menyimpan kode di log.",
+        "Unit test alur dengan socket mock, 515, dan loggedOut.",
+        "Typecheck passes"
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-032",
+      "title": "Klien API bot dan polling config",
+      "description": "Sebagai daemon, saya perlu mengambil konfigurasi terbaru dan mengirim batch dengan retry yang aman.",
+      "acceptanceCriteria": [
+        "Klien API memakai Bearer, retry 1/4/9 detik, dan idempotency key untuk batch.",
+        "Polling config memakai since dan cache TTL 10 detik; diff diterapkan tanpa restart.",
+        "Kegagalan API tidak menghentikan socket dan dicatat tanpa PII.",
+        "Unit test retry, cache, dan diff.",
+        "Typecheck passes"
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-033",
+      "title": "Pipeline pesan masuk",
+      "description": "Sebagai developer, saya perlu pipeline yang hanya memproses pesan grup aktif dan menegakkan rate limit.",
+      "acceptanceCriteria": [
+        "Pipeline mengabaikan pesan sendiri, status, broadcast, dan DM kecuali .help.",
+        "Hanya memproses grup aktif; parsing teks dan mention aman.",
+        "Rate limit per pengguna 8 pesan per 10 detik; kelebihan diabaikan.",
+        "Command tidak dikenal diabaikan tanpa error; dispatcher memanggil handler terdaftar.",
+        "Unit test filter, rate limit, dan dispatch.",
+        "Typecheck passes"
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-034",
+      "title": "Command inti",
+      "description": "Sebagai anggota grup, saya ingin command dasar untuk mengenal bot dan grup.",
+      "acceptanceCriteria": [
+        ".menu menampilkan daftar command aktif; .help [command] menampilkan bantuan.",
+        ".ping membalas pong dengan latensi; .id mengembalikan JID grup dan pengguna ter-mask.",
+        "Prefix berasal dari settings grup, case-insensitive, dan command tetap bekerja setelah config berubah.",
+        "Unit test output dan prefix.",
+        "Typecheck passes"
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-035",
+      "title": "Pesan selamat datang dan pamit",
+      "description": "Sebagai admin grup, saya ingin menyambut anggota baru dan mengucapkan pamit secara otomatis.",
+      "acceptanceCriteria": [
+        "Renderer mengganti {nama}, {grup}, dan {tanggal} serta memotong hasil maksimal 1000 karakter.",
+        "Welcome dikirim saat participant join dan goodbye saat leave, hanya jika diaktifkan.",
+        "Template kosong tidak mengirim pesan.",
+        "Unit test render, cap, dan on/off.",
+        "Typecheck passes"
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-036",
+      "title": "Anti-link",
+      "description": "Sebagai admin grup, saya ingin menindak tautan yang tidak diizinkan.",
+      "acceptanceCriteria": [
+        "Deteksi URL http/https dan domain tanpa protokol; allowlist per grup diterapkan.",
+        "Mode off/delete/kick; delete dalam 2 detik, kick hanya jika bot admin.",
+        "Setiap tindakan tercatat di audit atau event tanpa isi pesan lengkap.",
+        "Unit test regex, allowlist, dan mode.",
+        "Typecheck passes"
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-037",
+      "title": "Anti-spam dan mute",
+      "description": "Sebagai admin grup, saya ingin membatasi pesan beruntun tanpa memblokir diskusi normal.",
+      "acceptanceCriteria": [
+        "Anti-spam memakai sliding window 8 pesan per 10 detik per pengguna per grup.",
+        "Aksi warn/delete/mute; mute 5 menit dan dicek sebelum memproses pesan.",
+        "Whitelist admin dan tautan grup tidak terkena.",
+        "Unit test ambang, mute, dan whitelist.",
+        "Typecheck passes"
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-038",
+      "title": "Command admin grup",
+      "description": "Sebagai admin grup, saya ingin menendang atau membisukan anggota lewat command.",
+      "acceptanceCriteria": [
+        ".kick dan .mute hanya untuk admin grup; bot harus admin.",
+        "Cache status admin 60 detik; perubahan role terdeteksi setelah cache kedaluwarsa.",
+        "Penolakan mengirim alasan singkat, bukan diam.",
+        "Unit test izin, cache, dan penolakan.",
+        "Typecheck passes"
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-039",
+      "title": "XP dan level",
+      "description": "Sebagai anggota grup, saya ingin mendapat XP dari aktivitas dan melihat level saya.",
+      "acceptanceCriteria": [
+        "XP ditambah per pesan valid dan di-buffer per grup serta pengguna.",
+        "Flush setiap 60 detik atau 50 anggota; kirim batch idempoten dan tidak ada XP hilang saat retry.",
+        "Level dihitung dari formula PRD dan .level menampilkan XP, level, serta progres.",
+        "Unit test buffer, flush, formula, dan idempotensi.",
+        "Typecheck passes"
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-040",
+      "title": "Command leaderboard top",
+      "description": "Sebagai anggota grup, saya ingin melihat peringkat XP di grup saya.",
+      "acceptanceCriteria": [
+        ".top menampilkan 10 anggota teratas dengan peringkat dan XP.",
+        "Data diambil dengan group_id benar; grup kosong mengirim pesan informatif.",
+        "Nama pengguna di-mask jika tidak tersedia.",
+        "Unit test format dan empty state.",
+        "Typecheck passes"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-041",
+      "title": "Eksekusi command kustom",
+      "description": "Sebagai admin grup, saya ingin command buatan saya dijalankan hanya saat dipanggil.",
+      "acceptanceCriteria": [
+        "Command kustom dari config dieksekusi hanya pada kecocokan trigger persis.",
+        "Command disabled diabaikan; response dirender tanpa eksekusi kode.",
+        ".addcmd dan .delcmd hanya admin dan langsung memperbarui cache.",
+        "Unit test exact match, disabled, dan admin.",
+        "Typecheck passes"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-042",
+      "title": "Sinkronisasi grup",
+      "description": "Sebagai pengguna, saya ingin daftar grup di dashboard mengikuti kondisi WhatsApp yang sebenarnya.",
+      "acceptanceCriteria": [
+        "Event join/leave memperbarui groups.member_count, is_active, dan last_active.",
+        "Metadata grup seperti nama dan deskripsi disinkronkan saat connect dan saat berubah.",
+        "Grup yang ditinggalkan bot ditandai nonaktif, bukan dihapus.",
+        "Unit test join, leave, dan metadata.",
+        "Typecheck passes"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-043",
+      "title": "Batching event dan audit",
+      "description": "Sebagai developer, saya perlu mengirim log secara batch agar dashboard tetap terisi tanpa membebani setiap pesan.",
+      "acceptanceCriteria": [
+        "Event dan audit di-buffer lalu dikirim batch dengan retry 1/4/9 detik.",
+        "Nomor telepon dan kode pairing di-mask sebelum dikirim; isi pesan tidak dikirim.",
+        "Kegagalan tidak memblokir pipeline dan buffer dibatasi.",
+        "Unit test batching, masking, retry, dan cap.",
+        "Typecheck passes"
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-044",
+      "title": "Backup sesi terenkripsi",
+      "description": "Sebagai pengguna, saya ingin sesi WhatsApp bisa dipulihkan tanpa menyimpan kredensial plaintext di server.",
+      "acceptanceCriteria": [
+        "Kredensial Baileys dienkripsi AES-256-GCM dengan IV acak dan auth tag.",
+        "Backup dikirim ke R2 melalui API; restore memilih versi terbaru dan memvalidasi tag.",
+        "Simpan maksimal 3 versi; kunci tidak ada di repo atau D1.",
+        "Unit test enkripsi, tamper, rotasi versi, dan restore.",
+        "Typecheck passes"
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-045",
+      "title": "Command poll",
+      "description": "Sebagai anggota grup, saya ingin membuat polling WhatsApp dari command.",
+      "acceptanceCriteria": [
+        ".poll \"pertanyaan\" \"opsi1\" \"opsi2\" membuat native poll dengan minimal 2 opsi.",
+        "Argumen tanpa quote atau kurang dari 2 opsi menghasilkan pesan bantuan.",
+        "Poll mengirim nama bot dan selectable count 1.",
+        "Unit test parsing dan validasi.",
+        "Typecheck passes"
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-046",
+      "title": "Command sticker",
+      "description": "Sebagai anggota grup, saya ingin mengubah gambar menjadi sticker lewat reply.",
+      "acceptanceCriteria": [
+        ".sticker hanya memproses reply gambar maksimal 5 MB.",
+        "Gambar dikonversi ke WebP dan dikirim sebagai sticker; non-gambar mendapat pesan error.",
+        "Kegagalan konversi tidak mematikan socket.",
+        "Unit test validasi dan konversi dengan mock.",
+        "Typecheck passes"
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-047",
+      "title": "Mini game tebak",
+      "description": "Sebagai anggota grup, saya ingin bermain tebak-tebakan singkat dan mendapat XP.",
+      "acceptanceCriteria": [
+        ".tebak memulai ronde dengan pertanyaan dan 4 pilihan; .jawab menerima jawaban.",
+        "Ronde berakhir setelah 60 detik atau jawaban benar; XP hanya diberikan sekali.",
+        "Jawaban salah tidak mengakhiri ronde; tidak ada ronde ganda per grup.",
+        "Unit test timeout, jawaban benar/salah, dan XP.",
+        "Typecheck passes"
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-048",
+      "title": "Penjadwal pesan",
+      "description": "Sebagai admin grup, saya ingin pesan terjadwal terkirim tepat waktu tanpa duplikasi setelah restart.",
+      "acceptanceCriteria": [
+        "Tabel scheduled_messages menyimpan group_id, jadwal, teks, dan status.",
+        "Bot memeriksa setiap 30 detik, mengirim dalam 60 detik dari jadwal, dan menandai terkirim.",
+        "Setelah restart tidak ada pengiriman ganda; jadwal lampau lebih dari 5 menit dilewati.",
+        "Unit test due, kirim, idempoten, dan restart.",
+        "Typecheck passes"
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-049",
+      "title": "Purge data grup dan retensi",
+      "description": "Sebagai pengguna, saya ingin menghapus data grup yang tidak dipakai tanpa menghapus audit.",
+      "acceptanceCriteria": [
+        "POST /api/groups/:jid/purge menghapus settings, members, dan commands grup; audit tetap.",
+        "Job retention menghapus events lebih dari 7 hari, audit_log lebih dari 90 hari, dan daily_stats lebih dari 365 hari.",
+        "Purge meminta konfirmasi nama grup dan tidak menghapus baris groups.",
+        "Unit test purge, retention, dan konfirmasi.",
+        "Typecheck passes"
+      ],
+      "priority": 49,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-050",
+      "title": "Live log dashboard",
+      "description": "Sebagai pengguna, saya ingin log baru muncul tanpa memuat ulang halaman.",
+      "acceptanceCriteria": [
+        "GET /api/events/stream mengirim event baru via SSE dengan heartbeat 15 detik.",
+        "Dashboard berlangganan dan menambahkan baris tanpa refresh; reconnect otomatis saat putus.",
+        "Jika SSE gagal, fallback polling 5 detik dan tidak ada duplikasi baris.",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 50,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-051",
+      "title": "Regresi keamanan",
+      "description": "Sebagai developer, saya perlu test keamanan inti agar hardening tidak hilang saat fitur bertambah.",
+      "acceptanceCriteria": [
+        "Test regresi memastikan tidak ada kolom kredensial di schema D1.",
+        "Cookie sesi HttpOnly, Secure, dan SameSite=Lax; mutasi foreign Origin 403; upload lebih dari 2 MB 413.",
+        "Rate limit login dan pairing serta redaksi log diuji.",
+        "npm test lulus.",
+        "Typecheck passes"
+      ],
+      "priority": 51,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-052",
+      "title": "Konfigurasi deploy dan runbook",
+      "description": "Sebagai developer, saya ingin proyek bisa dijalankan dan dideploy dengan langkah yang terdokumentasi.",
+      "acceptanceCriteria": [
+        "wrangler.jsonc berisi binding D1 DB, R2 FILES, assets dashboard, dan compatibility date.",
+        ".env.example memuat semua variabel tanpa nilai rahasia; README berisi langkah install, migrate, dev, build, dan deploy.",
+        "npm run build dan npm run typecheck lulus; tidak ada secret di repo.",
+        "Typecheck passes"
+      ],
+      "priority": 52,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

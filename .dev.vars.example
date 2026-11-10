@@ -1,0 +1,6 @@
+DASHBOARD_PASSWORD_HASH=pbkdf2$100000$REPLACE_WITH_SALT$REPLACE_WITH_HASH
+SESSION_SECRET=replace-with-64-hex-characters
+APP_ORIGIN=http://localhost:8787
+# Setel "true" hanya saat perlu menyiapkan skema pada database baru,
+# lalu kembalikan ke "false" setelah bootstrap berhasil.
+SCHEMA_BOOTSTRAP=false

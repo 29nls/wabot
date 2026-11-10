@@ -1,0 +1,28 @@
+{
+  "name": "wabot",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run build:ui -w @wabot/web && wrangler dev --config wrangler.jsonc --port 8787",
+    "build": "npm run build -w @wabot/web",
+    "build:site": "npm run build && node scripts/build-site.mjs",
+    "typecheck": "npm run typecheck -w @wabot/web",
+    "test": "npm run test -w @wabot/web",
+    "db:migrate:local": "wrangler d1 execute wabot-control-plane --local --file=migrations/0001_init.sql && wrangler d1 execute wabot-control-plane --local --file=migrations/0002_auth_rate_limits.sql",
+    "hash-password": "node scripts/hash-password.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261110.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.7",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.160.0"
+  }
+}
