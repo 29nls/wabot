@@ -117,7 +117,7 @@ describe('worker routes', () => {
     expect(response.status).toBe(200);
     expect(body.data.status).toBe('degraded');
     expect(body.data.schema).toBe('missing');
-    expect(body.data.schema_version).toBe(3);
+    expect(body.data.schema_version).toBe(4);
   });
 
   it('rejects schema bootstrap without a session', async () => {

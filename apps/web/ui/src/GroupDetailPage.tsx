@@ -2,18 +2,24 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   getGroup,
   updateGroupSettings,
+  getGroupMembers,
+  getGroupAudit,
   type GroupDetail,
   type GroupSettings,
+  type GroupMember,
+  type GroupAuditEntry,
   type SessionData
 } from './api';
 
-type Tab = 'umum' | 'sambutan' | 'moderasi' | 'xp';
+type Tab = 'umum' | 'sambutan' | 'moderasi' | 'xp' | 'anggota' | 'audit';
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'umum', label: 'Umum' },
   { id: 'sambutan', label: 'Penyambutan' },
   { id: 'moderasi', label: 'Moderasi' },
-  { id: 'xp', label: 'XP' }
+  { id: 'xp', label: 'XP' },
+  { id: 'anggota', label: 'Anggota' },
+  { id: 'audit', label: 'Audit' }
 ];
 
 function parseAllowlist(raw: string): string[] {
@@ -34,10 +40,17 @@ function readonlySet(setting: GroupSettings): GroupSettings {
 }
 
 function renderTemplate(template: string): string {
+  const now = new Date().toLocaleDateString('id-ID');
   return template
+    .replaceAll('{mention}', '@Budi')
+    .replaceAll('{name}', 'Budi')
+    .replaceAll('{group}', 'Grup Contoh')
+    .replaceAll('{memberCount}', '12')
+    .replaceAll('{date}', now)
+    .replaceAll('{rules}', 'Patuhi aturan grup')
     .replaceAll('{nama}', 'Budi')
     .replaceAll('{grup}', 'Grup Contoh')
-    .replaceAll('{tanggal}', new Date().toLocaleDateString('id-ID'));
+    .replaceAll('{tanggal}', now);
 }
 
 interface GroupDetailPageProps {
@@ -50,6 +63,9 @@ export function GroupDetailPage({ session, jid, onNavigate }: GroupDetailPagePro
   const [group, setGroup] = useState<GroupDetail | null>(null);
   const [form, setForm] = useState<GroupSettings | null>(null);
   const [tab, setTab] = useState<Tab>('umum');
+  const [members, setMembers] = useState<GroupMember[] | null>(null);
+  const [audit, setAudit] = useState<GroupAuditEntry[] | null>(null);
+  const [listState, setListState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -74,6 +90,31 @@ export function GroupDetailPage({ session, jid, onNavigate }: GroupDetailPagePro
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (tab === 'anggota' && members === null) {
+      setListState('loading');
+      void getGroupMembers(jid).then((result) => {
+        if (result.status === 200 && result.body?.ok) {
+          setMembers(result.body.data.members);
+          setListState('idle');
+        } else {
+          setListState('error');
+        }
+      });
+    }
+    if (tab === 'audit' && audit === null) {
+      setListState('loading');
+      void getGroupAudit(jid).then((result) => {
+        if (result.status === 200 && result.body?.ok) {
+          setAudit(result.body.data.audit);
+          setListState('idle');
+        } else {
+          setListState('error');
+        }
+      });
+    }
+  }, [tab, jid, members, audit]);
 
   function set<K extends keyof GroupSettings>(key: K, value: GroupSettings[K]) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -348,6 +389,54 @@ export function GroupDetailPage({ session, jid, onNavigate }: GroupDetailPagePro
           >
             {saving ? 'Menyimpan...' : 'Simpan moderasi'}
           </button>
+        </section>
+      ) : null}
+
+      {tab === 'anggota' ? (
+        <section className="settings-form" aria-label="Anggota grup">
+          {listState === 'loading' ? <p className="field-help">Memuat anggota...</p> : null}
+          {listState === 'error' ? <p className="form-error page-error">Anggota tidak bisa dimuat.</p> : null}
+          {members && members.length === 0 ? <p className="field-help">Belum ada anggota.</p> : null}
+          {members && members.length > 0 ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>Anggota</th>
+                  <th>XP</th>
+                  <th>Level</th>
+                  <th>Pesan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((member) => (
+                  <tr key={member.user_jid}>
+                    <td>{member.push_name ?? member.user_jid_masked}</td>
+                    <td>{member.xp}</td>
+                    <td>{member.level}</td>
+                    <td>{member.message_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+        </section>
+      ) : null}
+
+      {tab === 'audit' ? (
+        <section className="settings-form" aria-label="Audit grup">
+          {listState === 'loading' ? <p className="field-help">Memuat audit...</p> : null}
+          {listState === 'error' ? <p className="form-error page-error">Audit tidak bisa dimuat.</p> : null}
+          {audit && audit.length === 0 ? <p className="field-help">Belum ada audit.</p> : null}
+          {audit && audit.length > 0 ? (
+            <ul>
+              {audit.map((entry) => (
+                <li key={entry.id}>
+                  <span className="mono-value">{entry.actor_jid_masked}</span> · {entry.action} ·{' '}
+                  {new Date(entry.created_at).toLocaleString('id-ID')}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </section>
       ) : null}
 

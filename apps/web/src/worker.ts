@@ -1084,6 +1084,98 @@ app.patch('/api/groups/:jid/settings', async (c) => {
   return ok(c, { group_jid: jid, settings: settings ?? DEFAULT_GROUP_SETTINGS });
 });
 
+/* --------------------------- grup: anggota & audit --------------------------- */
+
+app.get('/api/groups/:jid/members', async (c) => {
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+
+  const jid = c.req.param('jid');
+  const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+    .bind(jid, botId(c.env))
+    .first<{ jid: string }>();
+  if (!group) return fail(c, 404, 'not_found', 'Grup tidak ditemukan.');
+
+  const sort = c.req.query('sort') ?? 'xp';
+  const limitRaw = Number(c.req.query('limit') ?? 50);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 100) : 50;
+  const orderBy =
+    sort === 'level'
+      ? 'level DESC, xp DESC'
+      : sort === 'last_active'
+        ? 'COALESCE(last_active_at, 0) DESC'
+        : 'xp DESC, level DESC';
+
+  const rows = await c.env.DB.prepare(
+    `SELECT user_jid, push_name, xp, level, message_count, violations, last_active_at
+     FROM members WHERE group_jid = ?1 ORDER BY ${orderBy} LIMIT ?2`
+  )
+    .bind(jid, limit)
+    .all<{
+      user_jid: string;
+      push_name: string | null;
+      xp: number;
+      level: number;
+      message_count: number;
+      violations: number;
+      last_active_at: number | null;
+    }>();
+
+  return ok(c, {
+    members: (rows.results ?? []).map((row) => ({
+      user_jid: row.user_jid,
+      user_jid_masked: maskJid(row.user_jid),
+      push_name: row.push_name,
+      xp: row.xp,
+      level: row.level,
+      message_count: row.message_count,
+      violations: row.violations,
+      last_active_at: row.last_active_at
+    }))
+  });
+});
+
+app.get('/api/groups/:jid/audit', async (c) => {
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+
+  const jid = c.req.param('jid');
+  const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+    .bind(jid, botId(c.env))
+    .first<{ jid: string }>();
+  if (!group) return fail(c, 404, 'not_found', 'Grup tidak ditemukan.');
+
+  const limitRaw = Number(c.req.query('limit') ?? 100);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 100;
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, actor_jid, action, target_jid, detail, created_at
+     FROM audit_log WHERE group_jid = ?1 ORDER BY created_at DESC LIMIT ?2`
+  )
+    .bind(jid, limit)
+    .all<{
+      id: string;
+      actor_jid: string;
+      action: string;
+      target_jid: string | null;
+      detail: string | null;
+      created_at: number;
+    }>();
+
+  return ok(c, {
+    audit: (rows.results ?? []).map((row) => ({
+      id: row.id,
+      actor_jid_masked: maskJid(row.actor_jid),
+      action: row.action,
+      target_jid_masked: row.target_jid ? maskJid(row.target_jid) : null,
+      detail: row.detail,
+      created_at: row.created_at
+    }))
+  });
+});
+
 /* --------------------------------- media: R2 --------------------------------- */
 
 app.post('/api/media', async (c) => {
@@ -1185,7 +1277,7 @@ app.use('/api/bot/*', async (c, next) => {
 
   let limit: Awaited<ReturnType<typeof consumeRateLimit>>;
   try {
-    limit = await consumeRateLimit(c.env.DB, 'bot:global', BOT_LIMIT, BOT_WINDOW_MS);
+    limit = await consumeRateLimit(c.env.DB, `bot:${botId(c.env)}`, BOT_LIMIT, BOT_WINDOW_MS);
   } catch {
     return fail(c, 503, 'schema_missing', 'Skema database belum disiapkan.');
   }
@@ -1367,6 +1459,383 @@ app.post('/api/bot/pair-requests/:id/status', async (c) => {
   ]);
 
   return ok(c, { id: row.id, status: 'failed' as PairStatus, error_code: normalizedError });
+});
+
+/* -------------------------------- bot: config -------------------------------- */
+
+app.get('/api/bot/config', async (c) => {
+  const sinceRaw = c.req.query('since');
+  const since = sinceRaw ? Number(sinceRaw) : 0;
+
+  const groups = await c.env.DB.prepare(
+    `SELECT jid, name, member_count, is_active FROM groups WHERE bot_id = ?1 ORDER BY jid`
+  )
+    .bind(botId(c.env))
+    .all<{ jid: string; name: string; member_count: number; is_active: number }>();
+
+  const resultGroups: unknown[] = [];
+  for (const group of groups.results ?? []) {
+    const settings = await c.env.DB.prepare(
+      `SELECT ${Object.keys(DEFAULT_GROUP_SETTINGS).join(', ')} FROM group_settings WHERE group_jid = ?1`
+    )
+      .bind(group.jid)
+      .first<GroupSettings>();
+
+    const commands = await c.env.DB.prepare(
+      `SELECT trigger, response, enabled FROM commands WHERE group_jid = ?1`
+    )
+      .bind(group.jid)
+      .all<{ trigger: string; response: string; enabled: number }>();
+
+    resultGroups.push({
+      jid: group.jid,
+      name: group.name,
+      member_count: group.member_count,
+      is_active: group.is_active,
+      settings: settings ?? DEFAULT_GROUP_SETTINGS,
+      commands: commands.results ?? []
+    });
+  }
+
+  return ok(c, { since, now: Date.now(), groups: resultGroups });
+});
+
+/* -------------------------------- bot: groups sync -------------------------------- */
+
+app.post('/api/bot/groups/sync', async (c) => {
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (key !== 'groups' && key !== 'complete') {
+      return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+    }
+  }
+
+  const groupsRaw = record.groups;
+  if (!Array.isArray(groupsRaw)) {
+    return fail(c, 400, 'invalid_request', 'groups harus array.');
+  }
+  if (groupsRaw.length > 500) {
+    return fail(c, 400, 'batch_too_large', 'Maksimal 500 grup per sync.');
+  }
+
+  const complete = (body as Record<string, unknown>).complete === true;
+  const now = Date.now();
+  const id = botId(c.env);
+  const seen: string[] = [];
+
+  for (const item of groupsRaw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return fail(c, 400, 'invalid_request', 'Item grup tidak valid.');
+    }
+    const record = item as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!['jid', 'name', 'member_count', 'owner_jid'].includes(key)) {
+        return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+      }
+    }
+    const jid = record.jid;
+    const name = record.name;
+    if (typeof jid !== 'string' || !jid.endsWith('@g.us')) {
+      return fail(c, 400, 'invalid_request', 'jid grup tidak valid.');
+    }
+    if (typeof name !== 'string' || name.length === 0 || name.length > 200) {
+      return fail(c, 400, 'invalid_request', 'name grup tidak valid.');
+    }
+    const memberCount =
+      typeof record.member_count === 'number' && Number.isInteger(record.member_count) && record.member_count >= 0
+        ? record.member_count
+        : 0;
+    const ownerJid = typeof record.owner_jid === 'string' ? record.owner_jid : null;
+
+    await c.env.DB.prepare(
+      `INSERT INTO groups (jid, bot_id, name, owner_jid, member_count, is_active, joined_at, last_synced_at, last_active_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?6, ?6)
+       ON CONFLICT(jid) DO UPDATE SET
+         bot_id = ?2,
+         name = ?3,
+         owner_jid = COALESCE(?4, owner_jid),
+         member_count = ?5,
+         is_active = 1,
+         last_synced_at = ?6`
+    )
+      .bind(jid, id, name, ownerJid, memberCount, now)
+      .run();
+
+    await c.env.DB.prepare('INSERT OR IGNORE INTO group_settings (group_jid, updated_at) VALUES (?1, ?2)')
+      .bind(jid, now)
+      .run();
+
+    seen.push(jid);
+  }
+
+  let deactivated = 0;
+  if (complete) {
+    const placeholders = seen.length > 0 ? seen.map((_, i) => `?${i + 2}`).join(',') : "''";
+    const sql =
+      seen.length > 0
+        ? `UPDATE groups SET is_active = 0, last_synced_at = ?1 WHERE bot_id = ?2 AND jid NOT IN (${placeholders})`
+        : `UPDATE groups SET is_active = 0, last_synced_at = ?1 WHERE bot_id = ?2`;
+    const stmt = c.env.DB.prepare(sql);
+    const bound = seen.length > 0 ? stmt.bind(now, id, ...seen) : stmt.bind(now, id);
+    const result = await bound.run();
+    deactivated = (result as { meta?: { changes?: number } }).meta?.changes ?? 0;
+  }
+
+  return ok(c, { synced: seen.length, deactivated });
+});
+
+/* -------------------------------- bot: members xp -------------------------------- */
+
+app.post('/api/bot/members/xp', async (c) => {
+  const idempotencyKey = c.req.header('Idempotency-Key');
+  if (!idempotencyKey || idempotencyKey.length > 128) {
+    return fail(c, 400, 'invalid_request', 'Idempotency-Key wajib diisi.');
+  }
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'updates')) {
+    const unknown = Object.keys(record).find((key) => key !== 'updates');
+    return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${unknown}.`);
+  }
+
+  const updatesRaw = record.updates;
+  if (!Array.isArray(updatesRaw)) {
+    return fail(c, 400, 'invalid_request', 'updates harus array.');
+  }
+  if (updatesRaw.length === 0 || updatesRaw.length > 500) {
+    return fail(c, 400, 'batch_limit', 'Batch XP 1-500 entri.');
+  }
+
+  const updates: Array<{ group_jid: string; user_jid: string; push_name?: string | null; delta: number; messages: number }> = [];
+  for (const item of updatesRaw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return fail(c, 400, 'invalid_request', 'Entri XP tidak valid.');
+    }
+    const record = item as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!['group_jid', 'user_jid', 'push_name', 'delta', 'xp_delta', 'messages'].includes(key)) {
+        return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+      }
+    }
+    const groupJid = record.group_jid;
+    const userJid = record.user_jid;
+    const deltaRaw = record.delta ?? record.xp_delta;
+    const delta = typeof deltaRaw === 'number' ? deltaRaw : NaN;
+    if (typeof groupJid !== 'string' || !groupJid.endsWith('@g.us')) {
+      return fail(c, 400, 'invalid_request', 'group_jid tidak valid.');
+    }
+    if (typeof userJid !== 'string' || !userJid.includes('@')) {
+      return fail(c, 400, 'invalid_request', 'user_jid tidak valid.');
+    }
+    if (typeof delta !== 'number' || !Number.isFinite(delta) || delta < 0 || delta > 1000) {
+      return fail(c, 400, 'invalid_request', 'delta tidak valid.');
+    }
+    const messages = typeof record.messages === 'number' && Number.isInteger(record.messages) && record.messages > 0 ? record.messages : 1;
+    updates.push({
+      group_jid: groupJid,
+      user_jid: userJid,
+      push_name: typeof record.push_name === 'string' ? record.push_name : null,
+      delta,
+      messages
+    } as { group_jid: string; user_jid: string; push_name: string | null; delta: number; messages: number });
+  }
+
+  // Idempotency check.
+  const existing = await c.env.DB.prepare('SELECT key FROM bot_idempotency WHERE key = ?1')
+    .bind(idempotencyKey)
+    .first<{ key: string }>();
+  if (existing) {
+    return ok(c, { applied: false, duplicate: true, count: 0 });
+  }
+
+  const now = Date.now();
+  const bot = botId(c.env);
+
+  for (const update of updates) {
+    const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+      .bind(update.group_jid, bot)
+      .first<{ jid: string }>();
+    if (!group) {
+      return fail(c, 404, 'not_found', `Grup ${update.group_jid} tidak ditemukan.`);
+    }
+  }
+
+  for (const update of updates) {
+    await c.env.DB.prepare(
+      `INSERT INTO members (group_jid, user_jid, push_name, xp, level, message_count, joined_at, last_active_at)
+       VALUES (?1, ?2, ?3, 0, 1, 0, ?4, ?4)
+       ON CONFLICT(group_jid, user_jid) DO NOTHING`
+    )
+      .bind(update.group_jid, update.user_jid, update.push_name, now)
+      .run();
+
+    const current = await c.env.DB.prepare(
+      'SELECT xp FROM members WHERE group_jid = ?1 AND user_jid = ?2'
+    )
+      .bind(update.group_jid, update.user_jid)
+      .first<{ xp: number }>();
+
+    const newXp = (current?.xp ?? 0) + update.delta;
+    const newLevel = Math.floor(Math.sqrt(newXp / 100)) + 1;
+
+    await c.env.DB.prepare(
+      `UPDATE members SET xp = ?3, level = ?4, push_name = COALESCE(?5, push_name),
+         message_count = message_count + ?7, last_active_at = ?6
+       WHERE group_jid = ?1 AND user_jid = ?2`
+    )
+      .bind(update.group_jid, update.user_jid, newXp, newLevel, update.push_name, now, update.messages)
+      .run();
+  }
+
+  await c.env.DB.prepare(
+    'INSERT INTO bot_idempotency (key, bot_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)'
+  )
+    .bind(idempotencyKey, bot, now, now + 24 * 60 * 60 * 1000)
+    .run();
+
+  return ok(c, { applied: true, duplicate: false, count: updates.length });
+});
+
+/* -------------------------------- bot: audit -------------------------------- */
+
+app.post('/api/bot/audit', async (c) => {
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'entries')) {
+    const unknown = Object.keys(record).find((key) => key !== 'entries');
+    return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${unknown}.`);
+  }
+  const entriesRaw = record.entries;
+  if (!Array.isArray(entriesRaw)) {
+    return fail(c, 400, 'invalid_request', 'entries harus array.');
+  }
+  if (entriesRaw.length === 0 || entriesRaw.length > 100) {
+    return fail(c, 400, 'batch_limit', 'Batch audit 1-100 entri.');
+  }
+
+  const bot = botId(c.env);
+  const now = Date.now();
+  let count = 0;
+  for (const item of entriesRaw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return fail(c, 400, 'invalid_request', 'Entri audit tidak valid.');
+    }
+    const record = item as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!['group_jid', 'actor_jid', 'action', 'target_jid', 'detail'].includes(key)) {
+        return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+      }
+    }
+    const groupJid = record.group_jid;
+    const actorJid = record.actor_jid;
+    const action = record.action;
+    if (typeof groupJid !== 'string' || !groupJid.endsWith('@g.us')) {
+      return fail(c, 400, 'invalid_request', 'group_jid tidak valid.');
+    }
+    if (typeof actorJid !== 'string' || !actorJid.includes('@')) {
+      return fail(c, 400, 'invalid_request', 'actor_jid tidak valid.');
+    }
+    if (typeof action !== 'string' || action.length === 0 || action.length > 64) {
+      return fail(c, 400, 'invalid_request', 'action tidak valid.');
+    }
+    const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+      .bind(groupJid, bot)
+      .first<{ jid: string }>();
+    if (!group) return fail(c, 404, 'not_found', `Grup ${groupJid} tidak ditemukan.`);
+
+    const targetJid = typeof record.target_jid === 'string' ? record.target_jid : null;
+    const detail = typeof record.detail === 'string' ? record.detail.slice(0, 2000) : null;
+
+    await c.env.DB.prepare(
+      `INSERT INTO audit_log (id, group_jid, actor_jid, action, target_jid, detail, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
+    )
+      .bind(`au_${randomToken(12)}`, groupJid, actorJid, action, targetJid, detail, now)
+      .run();
+    count += 1;
+  }
+
+  return ok(c, { inserted: count });
+});
+
+/* -------------------------------- bot: events -------------------------------- */
+
+app.post('/api/bot/events', async (c) => {
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'entries')) {
+    const unknown = Object.keys(record).find((key) => key !== 'entries');
+    return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${unknown}.`);
+  }
+  const entriesRaw = record.entries;
+  if (!Array.isArray(entriesRaw)) {
+    return fail(c, 400, 'invalid_request', 'entries harus array.');
+  }
+  if (entriesRaw.length === 0 || entriesRaw.length > 100) {
+    return fail(c, 400, 'batch_limit', 'Batch events 1-100 entri.');
+  }
+
+  const bot = botId(c.env);
+  const now = Date.now();
+  const levels = new Set(['debug', 'info', 'warn', 'error']);
+  let count = 0;
+  for (const item of entriesRaw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return fail(c, 400, 'invalid_request', 'Entri event tidak valid.');
+    }
+    const record = item as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!['level', 'scope', 'message', 'meta'].includes(key)) {
+        return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+      }
+    }
+    const level = record.level;
+    const scope = record.scope;
+    const message = record.message;
+    if (typeof level !== 'string' || !levels.has(level)) {
+      return fail(c, 400, 'invalid_request', 'level tidak valid.');
+    }
+    if (typeof scope !== 'string' || scope.length === 0 || scope.length > 64) {
+      return fail(c, 400, 'invalid_request', 'scope tidak valid.');
+    }
+    if (typeof message !== 'string' || message.length === 0 || message.length > 500) {
+      return fail(c, 400, 'invalid_request', 'message tidak valid.');
+    }
+    const meta = typeof record.meta === 'string' ? record.meta.slice(0, 2000) : null;
+
+    await c.env.DB.prepare(
+      `INSERT INTO events (id, bot_id, level, scope, message, meta, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
+    )
+      .bind(`ev_${randomToken(12)}`, bot, level, scope, message, meta, now)
+      .run();
+    count += 1;
+  }
+
+  return ok(c, { inserted: count });
 });
 
 app.notFound(async (c) => {

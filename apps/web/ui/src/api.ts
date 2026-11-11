@@ -223,3 +223,47 @@ export function updateGroupSettings(
     }
   );
 }
+
+export interface GroupMember {
+  user_jid: string;
+  user_jid_masked: string;
+  push_name: string | null;
+  xp: number;
+  level: number;
+  message_count: number;
+  violations: number;
+  last_active_at: number | null;
+}
+
+export function getGroupMembers(
+  jid: string,
+  sort: 'xp' | 'level' | 'last_active' = 'xp',
+  limit = 50
+): Promise<ApiResult<{ members: GroupMember[] }>> {
+  const params = new URLSearchParams();
+  params.set('sort', sort);
+  params.set('limit', String(limit));
+  return request<{ members: GroupMember[] }>(
+    `/api/groups/${encodeURIComponent(jid)}/members?${params.toString()}`
+  );
+}
+
+export interface GroupAuditEntry {
+  id: string;
+  actor_jid_masked: string;
+  action: string;
+  target_jid_masked: string | null;
+  detail: string | null;
+  created_at: number;
+}
+
+export function getGroupAudit(
+  jid: string,
+  limit = 100
+): Promise<ApiResult<{ audit: GroupAuditEntry[] }>> {
+  const params = new URLSearchParams();
+  params.set('limit', String(limit));
+  return request<{ audit: GroupAuditEntry[] }>(
+    `/api/groups/${encodeURIComponent(jid)}/audit?${params.toString()}`
+  );
+}
