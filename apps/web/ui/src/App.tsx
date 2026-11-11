@@ -13,6 +13,9 @@ import { AppShell, BrandLine, ThemeToggle } from './Shell';
 import { PairPage } from './PairPage';
 import { GroupsPage } from './GroupsPage';
 import { GroupDetailPage } from './GroupDetailPage';
+import { CommandsPage } from './CommandsPage';
+import { LogsPage } from './LogsPage';
+import { SettingsPage } from './SettingsPage';
 
 type View =
   | { kind: 'loading' }
@@ -482,7 +485,13 @@ export function App() {
     }
 
     const knownPath =
-      path === '/' || path === '/pair' || path === '/groups' || path.startsWith('/groups/');
+      path === '/' ||
+      path === '/pair' ||
+      path === '/groups' ||
+      path.startsWith('/groups/') ||
+      path === '/commands' ||
+      path === '/logs' ||
+      path === '/settings';
     if (view.kind === 'authenticated' && !knownPath) {
       window.history.replaceState(null, '', '/');
       setPath('/');
@@ -580,6 +589,30 @@ export function App() {
           jid={decodeURIComponent(groupMatch[1])}
           onNavigate={navigate}
         />
+      </AppShell>
+    );
+  }
+
+  if (path === '/commands') {
+    return (
+      <AppShell path="/commands" version="v0.1.0" loggingOut={false} onLogout={() => { void logout(view.session.csrf_token).finally(goToLogin); }} onNavigate={navigate}>
+        <CommandsPage session={view.session} onNavigate={navigate} />
+      </AppShell>
+    );
+  }
+
+  if (path === '/logs') {
+    return (
+      <AppShell path="/logs" version="v0.1.0" loggingOut={false} onLogout={() => { void logout(view.session.csrf_token).finally(goToLogin); }} onNavigate={navigate}>
+        <LogsPage session={view.session} />
+      </AppShell>
+    );
+  }
+
+  if (path === '/settings') {
+    return (
+      <AppShell path="/settings" version="v0.1.0" loggingOut={false} onLogout={() => { void logout(view.session.csrf_token).finally(goToLogin); }} onNavigate={navigate}>
+        <SettingsPage session={view.session} onLogout={goToLogin} />
       </AppShell>
     );
   }

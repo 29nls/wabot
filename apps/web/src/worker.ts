@@ -1084,6 +1084,49 @@ app.patch('/api/groups/:jid/settings', async (c) => {
   return ok(c, { group_jid: jid, settings: settings ?? DEFAULT_GROUP_SETTINGS });
 });
 
+/* ------------------------------ overview ------------------------------------- */
+
+app.get('/api/overview', async (c) => {
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+
+  const id = botId(c.env);
+  const jakartaNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const today = jakartaNow.toISOString().slice(0, 10);
+
+  const activeGroups = await c.env.DB.prepare(
+    'SELECT COUNT(*) AS c FROM groups WHERE bot_id = ?1 AND is_active = 1'
+  )
+    .bind(id)
+    .first<{ c: number }>();
+
+  const todayStats = await c.env.DB.prepare(
+    'SELECT COALESCE(SUM(messages_in),0) AS messages, COALESCE(SUM(commands_used),0) AS commands FROM daily_stats WHERE bot_id = ?1 AND stat_date = ?2'
+  )
+    .bind(id, today)
+    .first<{ messages: number; commands: number }>();
+
+  const rows = await c.env.DB.prepare(
+    `SELECT stat_date, messages_in FROM daily_stats WHERE bot_id = ?1 ORDER BY stat_date DESC LIMIT 7`
+  )
+    .bind(id)
+    .all<{ stat_date: string; messages_in: number }>();
+
+  const sparkline = (rows.results ?? []).reverse().map((row) => ({
+    date: row.stat_date,
+    messages: row.messages_in
+  }));
+
+  return ok(c, {
+    bot: { status: (await c.env.DB.prepare('SELECT status, last_seen_at FROM bots WHERE id = ?1').bind(id).first<{ status: string; last_seen_at: number | null }>()) ?? { status: 'unpaired', last_seen_at: null } },
+    active_groups: activeGroups?.c ?? 0,
+    messages_today: todayStats?.messages ?? 0,
+    commands_today: todayStats?.commands ?? 0,
+    sparkline
+  });
+});
+
 /* --------------------------- grup: anggota & audit --------------------------- */
 
 app.get('/api/groups/:jid/members', async (c) => {
@@ -1176,6 +1219,200 @@ app.get('/api/groups/:jid/audit', async (c) => {
   });
 });
 
+/* --------------------------- grup: commands --------------------------------- */
+
+app.get('/api/groups/:jid/commands', async (c) => {
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+
+  const jid = c.req.param('jid');
+  const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+    .bind(jid, botId(c.env))
+    .first<{ jid: string }>();
+  if (!group) return fail(c, 404, 'not_found', 'Grup tidak ditemukan.');
+
+  const rows = await c.env.DB.prepare(
+    'SELECT id, trigger, response, enabled, created_at, updated_at FROM commands WHERE group_jid = ?1 ORDER BY trigger'
+  )
+    .bind(jid)
+    .all<{
+      id: string;
+      trigger: string;
+      response: string;
+      enabled: number;
+      created_at: number;
+      updated_at: number;
+    }>();
+
+  return ok(c, { commands: rows.results ?? [] });
+});
+
+app.post('/api/groups/:jid/commands', async (c) => {
+  if (!isSameOrigin(c)) return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!hasValidCsrf(c, session)) return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+
+  const jid = c.req.param('jid');
+  const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+    .bind(jid, botId(c.env))
+    .first<{ jid: string }>();
+  if (!group) return fail(c, 404, 'not_found', 'Grup tidak ditemukan.');
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!['trigger', 'response', 'enabled'].includes(key)) {
+      return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+    }
+  }
+
+  const trigger = record.trigger;
+  const responseText = record.response;
+  if (typeof trigger !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(trigger)) {
+    return fail(c, 400, 'invalid_request', 'trigger tidak valid.');
+  }
+  if (typeof responseText !== 'string' || responseText.length === 0 || responseText.length > 1000) {
+    return fail(c, 400, 'invalid_request', 'response maksimal 1000 karakter.');
+  }
+  const enabled = record.enabled === undefined ? 1 : record.enabled === true ? 1 : record.enabled === false ? 0 : null;
+  if (enabled === null) return fail(c, 400, 'invalid_request', 'enabled harus boolean.');
+
+  const now = Date.now();
+  const id = `cmd_${randomToken(12)}`;
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO commands (id, group_jid, trigger, response, enabled, created_by, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, 'owner', ?6, ?6)`
+    )
+      .bind(id, jid, trigger.toLowerCase(), responseText, enabled, now)
+      .run();
+  } catch {
+    return fail(c, 409, 'duplicate_trigger', 'Trigger sudah ada di grup ini.');
+  }
+
+  return ok(c, { id, trigger: trigger.toLowerCase(), response: responseText, enabled }, 201);
+});
+
+app.patch('/api/commands/:id', async (c) => {
+  if (!isSameOrigin(c)) return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!hasValidCsrf(c, session)) return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+
+  const id = c.req.param('id');
+  const command = await c.env.DB.prepare(
+    `SELECT c.id, c.group_jid FROM commands c
+     LEFT JOIN groups g ON g.jid = c.group_jid
+     WHERE c.id = ?1 AND (c.group_jid IS NULL OR g.bot_id = ?2)`
+  )
+    .bind(id, botId(c.env))
+    .first<{ id: string; group_jid: string | null }>();
+  if (!command) return fail(c, 404, 'not_found', 'Command tidak ditemukan.');
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  const patch: Record<string, string | number> = {};
+  if (record.trigger !== undefined) {
+    if (typeof record.trigger !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(record.trigger)) {
+      return fail(c, 400, 'invalid_request', 'trigger tidak valid.');
+    }
+    patch.trigger = record.trigger.toLowerCase();
+  }
+  if (record.response !== undefined) {
+    if (typeof record.response !== 'string' || record.response.length === 0 || record.response.length > 1000) {
+      return fail(c, 400, 'invalid_request', 'response maksimal 1000 karakter.');
+    }
+    patch.response = record.response;
+  }
+  if (record.enabled !== undefined) {
+    if (typeof record.enabled !== 'boolean') return fail(c, 400, 'invalid_request', 'enabled harus boolean.');
+    patch.enabled = record.enabled ? 1 : 0;
+  }
+  if (Object.keys(patch).length === 0) return fail(c, 400, 'invalid_request', 'Tidak ada field yang diubah.');
+  for (const key of Object.keys(record)) {
+    if (!['trigger', 'response', 'enabled'].includes(key)) {
+      return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+    }
+  }
+
+  const now = Date.now();
+  const columns = Object.keys(patch);
+  const assignments = columns.map((column, index) => `${column} = ?${index + 2}`).join(', ');
+  const values = Object.values(patch);
+  await c.env.DB.prepare(
+    `UPDATE commands SET ${assignments}, updated_at = ?${columns.length + 2} WHERE id = ?1`
+  )
+    .bind(id, ...values, now)
+    .run();
+
+  return ok(c, { id, ...patch });
+});
+
+app.delete('/api/commands/:id', async (c) => {
+  if (!isSameOrigin(c)) return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!hasValidCsrf(c, session)) return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+
+  const id = c.req.param('id');
+  const command = await c.env.DB.prepare(
+    `SELECT c.id FROM commands c
+     LEFT JOIN groups g ON g.jid = c.group_jid
+     WHERE c.id = ?1 AND (c.group_jid IS NULL OR g.bot_id = ?2)`
+  )
+    .bind(id, botId(c.env))
+    .first<{ id: string }>();
+  if (!command) return fail(c, 404, 'not_found', 'Command tidak ditemukan.');
+
+  await c.env.DB.prepare('DELETE FROM commands WHERE id = ?1').bind(id).run();
+  return ok(c, { id, deleted: true });
+});
+
+/* --------------------------------- events ----------------------------------- */
+
+app.get('/api/events', async (c) => {
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+
+  const level = c.req.query('level');
+  const limitRaw = Number(c.req.query('limit') ?? 100);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 200) : 100;
+  const id = botId(c.env);
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, level, scope, message, meta, created_at FROM events
+     WHERE bot_id = ?1 ${level ? 'AND level = ?2' : ''}
+     ORDER BY created_at DESC LIMIT ${level ? '?3' : '?2'}`
+  )
+    .bind(...(level ? [id, level, limit] : [id, limit]))
+    .all<{
+      id: string;
+      level: string;
+      scope: string;
+      message: string;
+      meta: string | null;
+      created_at: number;
+    }>();
+
+  return ok(c, { events: rows.results ?? [] });
+});
+
 /* --------------------------------- media: R2 --------------------------------- */
 
 app.post('/api/media', async (c) => {
@@ -1194,6 +1431,17 @@ app.post('/api/media', async (c) => {
 
   if (!hasValidCsrf(c, session)) {
     return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+  }
+
+  try {
+    const mediaLimit = await consumeRateLimit(c.env.DB, `media:${clientIp(c)}`, 10, 60 * 60 * 1000);
+    if (!mediaLimit.allowed) {
+      return fail(c, 429, 'media_rate_limited', 'Maksimal 10 unggahan per jam.', {
+        retry_after_seconds: Math.max(1, Math.ceil((mediaLimit.resetAt - Date.now()) / 1000))
+      });
+    }
+  } catch {
+    // Skema rate limit belum tersedia; jangan blokir unggahan media.
   }
 
   if (!c.env.FILES) {
@@ -1265,7 +1513,32 @@ app.get('/api/media/:id', async (c) => {
     return fail(c, 404, 'not_found', 'Media tidak ditemukan.');
   }
 
-  return ok(c, row);
+  return ok(c, { ...row, download_url: `/api/media/${row.id}/content` });
+});
+
+app.get('/api/media/:id/content', async (c) => {
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+
+  if (!c.env.FILES) return fail(c, 503, 'storage_unavailable', 'Penyimpanan media belum siap.');
+
+  const row = await c.env.DB.prepare(
+    'SELECT r2_key, mime FROM media_files WHERE id = ?1'
+  )
+    .bind(c.req.param('id'))
+    .first<{ r2_key: string; mime: string }>();
+  if (!row) return fail(c, 404, 'not_found', 'Media tidak ditemukan.');
+
+  const object = await c.env.FILES.get(row.r2_key);
+  if (!object) return fail(c, 404, 'not_found', 'Objek media tidak ditemukan.');
+
+  return new Response(object.body, {
+    headers: {
+      'Content-Type': row.mime,
+      'Content-Disposition': `inline; filename="${c.req.param('id')}"`
+    }
+  });
 });
 
 /* -------------------------------- pairing: bot -------------------------------- */

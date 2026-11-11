@@ -45,6 +45,8 @@ export interface HealthData {
   version: string;
   status: 'ok' | 'degraded';
   database: 'ok' | 'unavailable';
+  schema: string;
+  schema_version: number;
   time: number;
 }
 
@@ -266,4 +268,86 @@ export function getGroupAudit(
   return request<{ audit: GroupAuditEntry[] }>(
     `/api/groups/${encodeURIComponent(jid)}/audit?${params.toString()}`
   );
+}
+
+export interface OverviewData {
+  bot: { status: string; last_seen_at: number | null };
+  active_groups: number;
+  messages_today: number;
+  commands_today: number;
+  sparkline: Array<{ date: string; messages: number }>;
+}
+
+export function getOverview(): Promise<ApiResult<OverviewData>> {
+  return request<OverviewData>('/api/overview');
+}
+
+export interface CommandItem {
+  id: string;
+  trigger: string;
+  response: string;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export function getGroupCommands(
+  jid: string
+): Promise<ApiResult<{ commands: CommandItem[] }>> {
+  return request<{ commands: CommandItem[] }>(`/api/groups/${encodeURIComponent(jid)}/commands`);
+}
+
+export function createGroupCommand(
+  csrfToken: string,
+  jid: string,
+  trigger: string,
+  response: string,
+  enabled = true
+): Promise<ApiResult<{ id: string; trigger: string; response: string; enabled: number }>> {
+  return request(`/api/groups/${encodeURIComponent(jid)}/commands`, {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ trigger, response, enabled })
+  });
+}
+
+export function updateCommand(
+  csrfToken: string,
+  id: string,
+  patch: { trigger?: string; response?: string; enabled?: boolean }
+): Promise<ApiResult<{ id: string } & Record<string, unknown>>> {
+  return request(`/api/commands/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(patch)
+  });
+}
+
+export function deleteCommand(
+  csrfToken: string,
+  id: string
+): Promise<ApiResult<{ id: string; deleted: boolean }>> {
+  return request(`/api/commands/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken }
+  });
+}
+
+export interface EventItem {
+  id: string;
+  level: string;
+  scope: string;
+  message: string;
+  meta: string | null;
+  created_at: number;
+}
+
+export function getEvents(
+  level?: string,
+  limit = 100
+): Promise<ApiResult<{ events: EventItem[] }>> {
+  const params = new URLSearchParams();
+  if (level) params.set('level', level);
+  params.set('limit', String(limit));
+  return request<{ events: EventItem[] }>(`/api/events?${params.toString()}`);
 }

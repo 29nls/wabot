@@ -10,7 +10,10 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Ringkasan' },
   { path: '/pair', label: 'Pairing' },
-  { path: '/groups', label: 'Grup' }
+  { path: '/groups', label: 'Grup' },
+  { path: '/commands', label: 'Command' },
+  { path: '/logs', label: 'Log' },
+  { path: '/settings', label: 'Pengaturan' }
 ];
 
 function storedTheme(): Theme | null {
