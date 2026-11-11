@@ -5,6 +5,7 @@ export interface SessionPayload {
   iat: number;
   exp: number;
   csrf: string;
+  session_version: number;
 }
 
 export interface RateLimitResult {

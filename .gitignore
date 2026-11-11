@@ -13,3 +13,6 @@ coverage/
 .DS_Store
 Thumbs.db
 .secrets/
+
+# Kredensial WhatsApp daemon (Baileys)
+.auth/

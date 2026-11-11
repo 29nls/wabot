@@ -9,7 +9,8 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Ringkasan' },
-  { path: '/pair', label: 'Pairing' }
+  { path: '/pair', label: 'Pairing' },
+  { path: '/groups', label: 'Grup' }
 ];
 
 function storedTheme(): Theme | null {

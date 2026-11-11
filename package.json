@@ -3,14 +3,16 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "apps/web"
+    "apps/web",
+    "apps/bot"
   ],
   "scripts": {
     "dev": "npm run build:ui -w @wabot/web && wrangler dev --config wrangler.jsonc --port 8787",
+    "dev:bot": "npm run dev -w @wabot/bot",
     "build": "npm run build -w @wabot/web",
     "build:site": "npm run build && node scripts/build-site.mjs",
-    "typecheck": "npm run typecheck -w @wabot/web",
-    "test": "npm run test -w @wabot/web",
+    "typecheck": "npm run typecheck -w @wabot/web && npm run typecheck -w @wabot/bot",
+    "test": "npm run test -w @wabot/web && npm run test -w @wabot/bot",
     "db:migrate:local": "wrangler d1 execute wabot-control-plane --local --file=migrations/0001_init.sql && wrangler d1 execute wabot-control-plane --local --file=migrations/0002_auth_rate_limits.sql",
     "hash-password": "node scripts/hash-password.mjs"
   },

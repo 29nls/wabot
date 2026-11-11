@@ -4,12 +4,15 @@ import {
   getSession,
   login,
   logout,
+  logoutAll,
   type BotStatus,
   type HealthData,
   type SessionData
 } from './api';
 import { AppShell, BrandLine, ThemeToggle } from './Shell';
 import { PairPage } from './PairPage';
+import { GroupsPage } from './GroupsPage';
+import { GroupDetailPage } from './GroupDetailPage';
 
 type View =
   | { kind: 'loading' }
@@ -237,6 +240,8 @@ function HomePage({ session, onLogout, onNavigate, onRefresh }: HomePageProps) {
   const [health, setHealth] = useState<HealthView>({ kind: 'loading' });
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [logoutAllError, setLogoutAllError] = useState<string | null>(null);
 
   const loadHealth = useCallback(async () => {
     setHealth({ kind: 'loading' });
@@ -277,6 +282,29 @@ function HomePage({ session, onLogout, onNavigate, onRefresh }: HomePageProps) {
     }
   }
 
+  async function handleLogoutAll() {
+    setLoggingOutAll(true);
+    setLogoutAllError(null);
+
+    try {
+      const result = await logoutAll(session.csrf_token);
+      if (result.status === 200 || result.status === 401) {
+        onLogout();
+        return;
+      }
+
+      setLogoutAllError(
+        result.body && !result.body.ok
+          ? result.body.error.message
+          : 'Tidak bisa mencabut semua sesi. Coba lagi.'
+      );
+    } catch {
+      setLogoutAllError('Tidak bisa menghubungi server. Coba lagi.');
+    } finally {
+      setLoggingOutAll(false);
+    }
+  }
+
   const botLabel = session.bot ? botLabels[session.bot.status] : 'Belum terdaftar';
   const heartbeat =
     session.bot?.last_seen_at != null
@@ -305,6 +333,12 @@ function HomePage({ session, onLogout, onNavigate, onRefresh }: HomePageProps) {
         {logoutError ? (
           <p className="form-error page-error" role="alert">
             {logoutError}
+          </p>
+        ) : null}
+
+        {logoutAllError ? (
+          <p className="form-error page-error" role="alert">
+            {logoutAllError}
           </p>
         ) : null}
 
@@ -381,6 +415,24 @@ function HomePage({ session, onLogout, onNavigate, onRefresh }: HomePageProps) {
           </button>
         </section>
 
+        <section className="status-board" aria-labelledby="session-security-title">
+          <div className="board-header">
+            <h2 id="session-security-title">Keamanan sesi</h2>
+          </div>
+          <p className="board-copy">
+            Keluar dari semua perangkat menaikkan versi sesi bot. Semua cookie dashboard
+            yang pernah disalin langsung tidak berlaku, termasuk sesi di perangkat ini.
+          </p>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => void handleLogoutAll()}
+            disabled={loggingOutAll}
+          >
+            {loggingOutAll ? 'Mencabut semua sesi...' : 'Keluar dari semua perangkat'}
+          </button>
+        </section>
+
         <p className="disclaimer app-disclaimer">
           Wabot memakai protokol WhatsApp Web tidak resmi. Penggunaan pada nomor utama
           berisiko pemblokiran. Gunakan nomor khusus bot dan hindari pengiriman massal.
@@ -429,7 +481,9 @@ export function App() {
       setPath('/login');
     }
 
-    if (view.kind === 'authenticated' && path !== '/' && path !== '/pair') {
+    const knownPath =
+      path === '/' || path === '/pair' || path === '/groups' || path.startsWith('/groups/');
+    if (view.kind === 'authenticated' && !knownPath) {
       window.history.replaceState(null, '', '/');
       setPath('/');
     }
@@ -489,6 +543,43 @@ export function App() {
         onNavigate={navigate}
       >
         <PairPage session={view.session} onSessionRefresh={() => void refreshSession()} />
+      </AppShell>
+    );
+  }
+
+  if (path === '/groups') {
+    return (
+      <AppShell
+        path="/groups"
+        version="v0.1.0"
+        loggingOut={false}
+        onLogout={() => {
+          void logout(view.session.csrf_token).finally(goToLogin);
+        }}
+        onNavigate={navigate}
+      >
+        <GroupsPage session={view.session} onNavigate={navigate} />
+      </AppShell>
+    );
+  }
+
+  const groupMatch = /^\/groups\/(.+)$/.exec(path);
+  if (groupMatch) {
+    return (
+      <AppShell
+        path="/groups"
+        version="v0.1.0"
+        loggingOut={false}
+        onLogout={() => {
+          void logout(view.session.csrf_token).finally(goToLogin);
+        }}
+        onNavigate={navigate}
+      >
+        <GroupDetailPage
+          session={view.session}
+          jid={decodeURIComponent(groupMatch[1])}
+          onNavigate={navigate}
+        />
       </AppShell>
     );
   }

@@ -13,7 +13,8 @@ function session(exp = Date.now() + 60000): SessionPayload {
     sub: 'owner',
     iat: Date.now(),
     exp,
-    csrf: 'csrf-token'
+    csrf: 'csrf-token',
+    session_version: 0
   };
 }
 

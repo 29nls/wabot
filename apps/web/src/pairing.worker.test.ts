@@ -28,7 +28,9 @@ function fakeDb(handler: Handler = () => null): FakeDb {
           return statement;
         },
         async first() {
-          return (handler(sql, call.params) ?? null) as never;
+          const result = (handler(sql, call.params) ?? null) as never;
+          if (result === null && sql.includes('SELECT session_version FROM bots')) return { session_version: 0 } as never;
+          return result;
         },
         async run() {
           handler(sql, call.params);
@@ -62,9 +64,9 @@ function makeEnv(db: D1Database, overrides: Partial<Env> = {}): Env {
 const SECRET = 'secret-yang-cukup-panjang';
 const CSRF = 'csrf-token-uji';
 
-async function sessionCookie(): Promise<string> {
+async function sessionCookie(sessionVersion = 0): Promise<string> {
   const now = Date.now();
-  const token = await signSession({ sub: 'owner', iat: now, exp: now + 60_000, csrf: CSRF }, SECRET);
+  const token = await signSession({ sub: 'owner', iat: now, exp: now + 60_000, csrf: CSRF, session_version: sessionVersion }, SECRET);
   return `wabot_session=${token}`;
 }
 
@@ -126,7 +128,7 @@ describe('pairing dashboard routes', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(fake.calls).toHaveLength(0);
+    expect(fake.calls.filter((call) => call.sql.includes('pair_requests'))).toHaveLength(0);
   });
 
   it('requires a session to read a pair request', async () => {
@@ -146,6 +148,80 @@ describe('pairing dashboard routes', () => {
     expect(response.status).toBe(404);
     const select = fake.calls.find((call) => call.sql.includes('FROM pair_requests WHERE id'));
     expect(select?.params).toEqual(['pr_1', 'bot_1']);
+  });
+
+  it('membatalkan sesi yang sudah disalin setelah logout (cookie lama 401)', async () => {
+    let dbVersion = 0;
+    const fake = fakeDb((sql) => {
+      if (sql.includes('SELECT session_version FROM bots')) return { session_version: dbVersion };
+      if (sql.includes("UPDATE bots SET session_version")) {
+        dbVersion += 1;
+        return null;
+      }
+      return null;
+    });
+
+    const cookie = await sessionCookie(0);
+
+    const before = await app.request('/api/session', { headers: { Cookie: cookie } }, makeEnv(fake.db));
+    expect(before.status).toBe(200);
+
+    const logout = await app.request('/api/auth/logout', {
+      method: 'POST',
+      headers: { ...ORIGIN, 'Content-Type': 'application/json', Cookie: cookie, 'X-CSRF-Token': CSRF }
+    }, makeEnv(fake.db));
+    expect(logout.status).toBe(200);
+
+    const after = await app.request('/api/session', { headers: { Cookie: cookie } }, makeEnv(fake.db));
+    expect(after.status).toBe(401);
+  });
+
+  it('logout dari semua perangkat menaikkan session_version dan mencabut cookie lama', async () => {
+    let dbVersion = 0;
+    const fake = fakeDb((sql) => {
+      if (sql.includes('SELECT session_version FROM bots')) return { session_version: dbVersion };
+      if (sql.includes('UPDATE bots SET session_version')) {
+        dbVersion += 1;
+        return null;
+      }
+      return null;
+    });
+
+    const cookie = await sessionCookie(0);
+
+    const response = await app.request(
+      '/api/auth/logout-all',
+      {
+        method: 'POST',
+        headers: { ...ORIGIN, 'Content-Type': 'application/json', Cookie: cookie, 'X-CSRF-Token': CSRF }
+      },
+      makeEnv(fake.db)
+    );
+
+    expect(response.status).toBe(200);
+    expect(dbVersion).toBe(1);
+
+    const after = await app.request('/api/session', { headers: { Cookie: cookie } }, makeEnv(fake.db));
+    expect(after.status).toBe(401);
+  });
+
+  it('logout dari semua perangkat menolak tanpa CSRF atau tanpa sesi', async () => {
+    const fake = fakeDb();
+    const cookie = await sessionCookie();
+
+    const noCsrf = await app.request(
+      '/api/auth/logout-all',
+      { method: 'POST', headers: { ...ORIGIN, 'Content-Type': 'application/json', Cookie: cookie } },
+      makeEnv(fake.db)
+    );
+    expect(noCsrf.status).toBe(403);
+
+    const noSession = await app.request(
+      '/api/auth/logout-all',
+      { method: 'POST', headers: { ...ORIGIN, 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF } },
+      makeEnv(fake.db)
+    );
+    expect(noSession.status).toBe(401);
   });
 
   it('masks the phone number and hides the code until it is ready', async () => {

@@ -126,3 +126,19 @@ Catatan:
 - Sites hanya menerima modul ber-ekstensi JS/teks/JSON/WASM, jadi `build-site.mjs` mengunggah modul `.sql` sebagai `.txt` dan menulis ulang specifier impor di `worker.js`.
 
 Jangan menaruh nilai secret di `wrangler.jsonc`, README, atau aset publik.
+
+## Daemon bot (Baileys)
+
+Runtime WhatsApp berjalan sebagai proses Node terpisah di `apps/bot` karena Baileys membutuhkan koneksi persisten dan penyimpanan kredensial lokal.
+
+```bash
+export WABOT_API_URL=https://<origin-worker>
+export WABOT_API_KEY=<BOT_API_KEY environment tersebut>
+npm run dev:bot
+```
+
+Env opsional: `WABOT_BOT_ID` (default `bot_1`), `WABOT_AUTH_DIR` (default `.auth`), `WABOT_HEARTBEAT_MS` (default 30000). Kredensial Baileys disimpan atomik di `WABOT_AUTH_DIR` (gitignored, permission 600) dan tidak pernah masuk D1. Jangan menyalin nilai key ke repo atau log.
+
+## Media R2
+
+Binding `FILES` (`wabot-media`) dipakai `POST /api/media` (multipart, maksimal 2 MB, PNG/JPEG/WebP dengan validasi magic bytes) dan `GET /api/media/:id`. Di lokal, Wrangler mengemulasi R2; di Sites, bucket R2 diprovisikan per environment dan ter-attach saat deploy. Objek tidak punya URL publik langsung dan hanya diakses lewat Worker setelah sesi valid.

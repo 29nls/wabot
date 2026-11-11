@@ -16,6 +16,13 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "wabot-media",
+      "preview_bucket_name": "wabot-media"
+    }
+  ],
   "observability": {
     "enabled": true
   }

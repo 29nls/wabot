@@ -109,6 +109,15 @@ export function logout(csrfToken: string): Promise<ApiResult<{ authenticated: fa
   });
 }
 
+export function logoutAll(
+  csrfToken: string
+): Promise<ApiResult<{ authenticated: false; revoked_all: true }>> {
+  return request('/api/auth/logout-all', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken }
+  });
+}
+
 export function getHealth(): Promise<ApiResult<HealthData>> {
   return request<HealthData>('/api/health');
 }
@@ -136,4 +145,81 @@ export function cancelPairRequest(
     method: 'POST',
     headers: { 'X-CSRF-Token': csrfToken }
   });
+}
+
+export interface GroupSummary {
+  jid: string;
+  jid_masked: string;
+  name: string;
+  member_count: number;
+  is_active: number;
+  joined_at: number;
+  last_active_at: number | null;
+}
+
+export interface GroupDetail {
+  jid: string;
+  jid_masked: string;
+  name: string;
+  owner_jid_masked: string | null;
+  member_count: number;
+  is_active: number;
+  joined_at: number;
+  last_active_at: number | null;
+}
+
+export interface GroupSettings {
+  prefix: string;
+  locale: 'id' | 'en';
+  welcome_enabled: number;
+  welcome_template: string;
+  goodbye_enabled: number;
+  goodbye_template: string;
+  anti_link_mode: 'off' | 'delete' | 'kick';
+  link_allowlist: string;
+  anti_spam_enabled: number;
+  spam_max_msgs: number;
+  spam_window_sec: number;
+  spam_action: 'warn' | 'delete' | 'mute';
+  xp_enabled: number;
+  xp_per_message: number;
+  level_up_announce: number;
+  message_log: number;
+}
+
+export type GroupSettingsPatch = Partial<
+  Omit<GroupSettings, 'link_allowlist'> & { link_allowlist: string[] }
+>;
+
+export function getGroups(
+  q: string,
+  active: 'all' | 'active' | 'inactive'
+): Promise<ApiResult<{ groups: GroupSummary[] }>> {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  params.set('active', active === 'all' ? 'all' : active === 'active' ? '1' : '0');
+  return request<{ groups: GroupSummary[] }>(`/api/groups?${params.toString()}`);
+}
+
+export function getGroup(
+  jid: string
+): Promise<ApiResult<{ group: GroupDetail; settings: GroupSettings }>> {
+  return request<{ group: GroupDetail; settings: GroupSettings }>(
+    `/api/groups/${encodeURIComponent(jid)}`
+  );
+}
+
+export function updateGroupSettings(
+  csrfToken: string,
+  jid: string,
+  patch: GroupSettingsPatch
+): Promise<ApiResult<{ group_jid: string; settings: GroupSettings }>> {
+  return request<{ group_jid: string; settings: GroupSettings }>(
+    `/api/groups/${encodeURIComponent(jid)}/settings`,
+    {
+      method: 'PATCH',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify(patch)
+    }
+  );
 }

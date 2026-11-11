@@ -1,9 +1,10 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import initSchema from '../../../migrations/0001_init.sql';
 import rateLimitSchema from '../../../migrations/0002_auth_rate_limits.sql';
+import sessionVersionSchema from '../../../migrations/0003_session_version.sql';
 
 // Versi skema yang diharapkan kode ini. Naikkan setiap kali migrasi baru ditambahkan.
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const LOCK_NAME = 'schema_bootstrap';
 const LOCK_TTL_MS = 60 * 1000;
@@ -16,7 +17,8 @@ export interface Migration {
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: '0001_init', sql: initSchema },
-  { version: 2, name: '0002_auth_rate_limits', sql: rateLimitSchema }
+  { version: 2, name: '0002_auth_rate_limits', sql: rateLimitSchema },
+  { version: 3, name: '0003_session_version', sql: sessionVersionSchema }
 ];
 
 /**

@@ -39,6 +39,7 @@ export interface Env {
   BOT_API_KEY?: string;
   BOT_API_KEY_PREVIOUS?: string;
   BOT_ID?: string;
+  FILES?: R2Bucket;
 }
 
 type AppContext = Context<{ Bindings: Env; Variables: { session: SessionPayload } }>;
@@ -107,6 +108,14 @@ async function readSession(c: AppContext): Promise<SessionPayload | null> {
   const token = getCookie(c, SESSION_COOKIE);
   if (!token || !c.env.SESSION_SECRET) return null;
   return verifySession(token, c.env.SESSION_SECRET);
+}
+
+async function sessionVersionValid(c: AppContext, session: SessionPayload): Promise<boolean> {
+  const id = botId(c.env);
+  const row = await c.env.DB.prepare('SELECT session_version FROM bots WHERE id = ?1')
+    .bind(id)
+    .first<{ session_version: number }>();
+  return row !== null && row.session_version === session.session_version;
 }
 
 function hasValidCsrf(c: AppContext, session: SessionPayload): boolean {
@@ -263,6 +272,174 @@ function pairPayload(row: PairRow) {
   };
 }
 
+/** JID grup dan pengguna selalu dikirim dalam bentuk ter-mask. */
+function maskJid(jid: string): string {
+  const [user, domain] = jid.split('@');
+  const digits = user.replace(/\D/g, '');
+  if (!digits) return jid;
+  if (digits.length <= 8) return `${digits.slice(0, 3)}•••@${domain ?? ''}`;
+  return `${digits.slice(0, 5)}••••${digits.slice(-3)}@${domain ?? ''}`;
+}
+
+interface GroupSettings {
+  prefix: string;
+  locale: 'id' | 'en';
+  welcome_enabled: number;
+  welcome_template: string;
+  goodbye_enabled: number;
+  goodbye_template: string;
+  anti_link_mode: 'off' | 'delete' | 'kick';
+  link_allowlist: string;
+  anti_spam_enabled: number;
+  spam_max_msgs: number;
+  spam_window_sec: number;
+  spam_action: 'warn' | 'delete' | 'mute';
+  xp_enabled: number;
+  xp_per_message: number;
+  level_up_announce: number;
+  message_log: number;
+}
+
+const DEFAULT_GROUP_SETTINGS: GroupSettings = {
+  prefix: '.',
+  locale: 'id',
+  welcome_enabled: 1,
+  welcome_template: 'Halo {mention}, selamat datang di *{group}*! 👋',
+  goodbye_enabled: 0,
+  goodbye_template: '{name} keluar dari grup.',
+  anti_link_mode: 'delete',
+  link_allowlist: '[]',
+  anti_spam_enabled: 1,
+  spam_max_msgs: 8,
+  spam_window_sec: 10,
+  spam_action: 'warn',
+  xp_enabled: 1,
+  xp_per_message: 5,
+  level_up_announce: 1,
+  message_log: 0
+};
+
+const GROUP_SETTING_FIELDS = new Set(Object.keys(DEFAULT_GROUP_SETTINGS));
+
+function parseGroupSettingsPatch(
+  body: unknown
+): { ok: true; patch: Record<string, string | number> } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, message: 'Body harus objek JSON.' };
+  }
+
+  const entries = Object.entries(body as Record<string, unknown>);
+  if (entries.length === 0) return { ok: false, message: 'Tidak ada field yang diubah.' };
+
+  const patch: Record<string, string | number> = {};
+
+  for (const [key, value] of entries) {
+    if (!GROUP_SETTING_FIELDS.has(key)) {
+      return { ok: false, message: `Field tidak dikenal: ${key}.` };
+    }
+
+    switch (key) {
+      case 'prefix':
+        if (typeof value !== 'string' || !/^[^\s]{1,3}$/.test(value)) {
+          return { ok: false, message: 'prefix harus 1-3 karakter tanpa spasi.' };
+        }
+        patch[key] = value;
+        break;
+      case 'locale':
+        if (value !== 'id' && value !== 'en') return { ok: false, message: 'locale harus id atau en.' };
+        patch[key] = value;
+        break;
+      case 'welcome_template':
+      case 'goodbye_template':
+        if (typeof value !== 'string' || value.length > 1000) {
+          return { ok: false, message: `${key} maksimal 1000 karakter.` };
+        }
+        patch[key] = value;
+        break;
+      case 'anti_link_mode':
+        if (value !== 'off' && value !== 'delete' && value !== 'kick') {
+          return { ok: false, message: 'anti_link_mode harus off, delete, atau kick.' };
+        }
+        patch[key] = value;
+        break;
+      case 'spam_action':
+        if (value !== 'warn' && value !== 'delete' && value !== 'mute') {
+          return { ok: false, message: 'spam_action harus warn, delete, atau mute.' };
+        }
+        patch[key] = value;
+        break;
+      case 'link_allowlist':
+        if (
+          !Array.isArray(value) ||
+          value.length > 50 ||
+          !value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 253)
+        ) {
+          return { ok: false, message: 'link_allowlist harus array maksimal 50 domain.' };
+        }
+        patch[key] = JSON.stringify(value);
+        break;
+      case 'spam_max_msgs':
+        if (!Number.isInteger(value) || (value as number) < 3 || (value as number) > 20) {
+          return { ok: false, message: 'spam_max_msgs harus 3-20.' };
+        }
+        patch[key] = value as number;
+        break;
+      case 'spam_window_sec':
+        if (!Number.isInteger(value) || (value as number) < 5 || (value as number) > 60) {
+          return { ok: false, message: 'spam_window_sec harus 5-60.' };
+        }
+        patch[key] = value as number;
+        break;
+      case 'xp_per_message':
+        if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 50) {
+          return { ok: false, message: 'xp_per_message harus 1-50.' };
+        }
+        patch[key] = value as number;
+        break;
+      default:
+        if (typeof value !== 'boolean') return { ok: false, message: `${key} harus boolean.` };
+        patch[key] = value ? 1 : 0;
+    }
+  }
+
+  return { ok: true, patch };
+}
+
+const MEDIA_MAX_BYTES = 2 * 1024 * 1024;
+
+function detectImageMime(bytes: Uint8Array): string | null {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
 app.use('*', async (c, next) => {
   await next();
 
@@ -327,6 +504,10 @@ app.post('/api/admin/schema', async (c) => {
 
   const session = await readSession(c);
   if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
     return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
   }
 
@@ -413,11 +594,15 @@ app.post('/api/auth/login', async (c) => {
   }
 
   const now = Date.now();
+  const botRow = await c.env.DB.prepare('SELECT session_version FROM bots WHERE id = ?1')
+    .bind(botId(c.env))
+    .first<{ session_version: number }>();
   const session: SessionPayload = {
     sub: 'owner',
     iat: now,
     exp: now + SESSION_TTL_MS,
-    csrf: randomToken(16)
+    csrf: randomToken(16),
+    session_version: botRow?.session_version ?? 0
   };
   const token = await signSession(session, c.env.SESSION_SECRET);
   setSessionCookie(c, token);
@@ -432,6 +617,10 @@ app.post('/api/auth/login', async (c) => {
 app.get('/api/session', async (c) => {
   const session = await readSession(c);
   if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
     return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
   }
 
@@ -490,12 +679,49 @@ app.post('/api/auth/logout', async (c) => {
     return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
   }
 
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
   if (!hasValidCsrf(c, session)) {
     return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
   }
 
   clearSessionCookie(c);
+
+  await c.env.DB.prepare('UPDATE bots SET session_version = session_version + 1, updated_at = ?2 WHERE id = ?1')
+    .bind(botId(c.env), Date.now())
+    .run();
+
   return ok(c, { authenticated: false });
+});
+
+/** Mencabut semua sesi (termasuk yang sudah disalin) dengan menaikkan session_version bot. */
+app.post('/api/auth/logout-all', async (c) => {
+  if (!isSameOrigin(c)) {
+    return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  }
+
+  const session = await readSession(c);
+  if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!hasValidCsrf(c, session)) {
+    return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+  }
+
+  clearSessionCookie(c);
+
+  await c.env.DB.prepare('UPDATE bots SET session_version = session_version + 1, updated_at = ?2 WHERE id = ?1')
+    .bind(botId(c.env), Date.now())
+    .run();
+
+  return ok(c, { authenticated: false, revoked_all: true });
 });
 
 /* ------------------------------ pairing: dashboard ------------------------------ */
@@ -507,6 +733,10 @@ app.post('/api/pair-requests', async (c) => {
 
   const session = await readSession(c);
   if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
     return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
   }
 
@@ -624,6 +854,10 @@ app.get('/api/pair-requests/:id', async (c) => {
     return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
   }
 
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
   const row = await findPairRequest(c, c.req.param('id'));
   if (!row) {
     return fail(c, 404, 'not_found', 'Permintaan pairing tidak ditemukan.');
@@ -639,6 +873,10 @@ app.post('/api/pair-requests/:id/cancel', async (c) => {
 
   const session = await readSession(c);
   if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
     return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
   }
 
@@ -677,6 +915,267 @@ app.post('/api/pair-requests/:id/cancel', async (c) => {
   return ok(c, { id: row.id, status: 'cancelled' as PairStatus });
 });
 
+/* --------------------------------- grup: dashboard -------------------------------- */
+
+app.get('/api/groups', async (c) => {
+  const session = await readSession(c);
+  if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  const q = (c.req.query('q') ?? '').trim().slice(0, 100);
+  const activeParam = c.req.query('active') ?? 'all';
+  const active =
+    activeParam === '1' || activeParam === 'true'
+      ? 1
+      : activeParam === '0' || activeParam === 'false'
+        ? 0
+        : null;
+
+  const rows = await c.env.DB.prepare(
+    `SELECT jid, name, member_count, is_active, joined_at, last_active_at
+     FROM groups
+     WHERE bot_id = ?1
+       AND (?2 = '' OR name LIKE ?3)
+       AND (?4 IS NULL OR is_active = ?4)
+     ORDER BY COALESCE(last_active_at, joined_at) DESC
+     LIMIT 200`
+  )
+    .bind(botId(c.env), q, `%${q}%`, active)
+    .all<{
+      jid: string;
+      name: string;
+      member_count: number;
+      is_active: number;
+      joined_at: number;
+      last_active_at: number | null;
+    }>();
+
+  return ok(c, {
+    groups: (rows.results ?? []).map((row) => ({
+      jid: row.jid,
+      jid_masked: maskJid(row.jid),
+      name: row.name,
+      member_count: row.member_count,
+      is_active: row.is_active,
+      joined_at: row.joined_at,
+      last_active_at: row.last_active_at
+    }))
+  });
+});
+
+app.get('/api/groups/:jid', async (c) => {
+  const session = await readSession(c);
+  if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  const jid = c.req.param('jid');
+  const group = await c.env.DB.prepare(
+    `SELECT jid, name, owner_jid, member_count, is_active, joined_at, last_active_at
+     FROM groups WHERE jid = ?1 AND bot_id = ?2`
+  )
+    .bind(jid, botId(c.env))
+    .first<{
+      jid: string;
+      name: string;
+      owner_jid: string | null;
+      member_count: number;
+      is_active: number;
+      joined_at: number;
+      last_active_at: number | null;
+    }>();
+
+  if (!group) {
+    return fail(c, 404, 'not_found', 'Grup tidak ditemukan.');
+  }
+
+  const settings = await c.env.DB.prepare(
+    `SELECT ${Object.keys(DEFAULT_GROUP_SETTINGS).join(', ')} FROM group_settings WHERE group_jid = ?1`
+  )
+    .bind(jid)
+    .first<GroupSettings>();
+
+  return ok(c, {
+    group: {
+      jid: group.jid,
+      jid_masked: maskJid(group.jid),
+      name: group.name,
+      owner_jid_masked: group.owner_jid ? maskJid(group.owner_jid) : null,
+      member_count: group.member_count,
+      is_active: group.is_active,
+      joined_at: group.joined_at,
+      last_active_at: group.last_active_at
+    },
+    settings: settings ?? DEFAULT_GROUP_SETTINGS
+  });
+});
+
+app.patch('/api/groups/:jid/settings', async (c) => {
+  if (!isSameOrigin(c)) {
+    return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  }
+
+  const session = await readSession(c);
+  if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!hasValidCsrf(c, session)) {
+    return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+  }
+
+  const jid = c.req.param('jid');
+  const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+    .bind(jid, botId(c.env))
+    .first<{ jid: string }>();
+
+  if (!group) {
+    return fail(c, 404, 'not_found', 'Grup tidak ditemukan.');
+  }
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+
+  const patch = parseGroupSettingsPatch(parsed.body);
+  if (!patch.ok) {
+    return fail(c, 400, 'invalid_settings', patch.message);
+  }
+
+  const now = Date.now();
+  await c.env.DB.prepare('INSERT OR IGNORE INTO group_settings (group_jid, updated_at) VALUES (?1, ?2)')
+    .bind(jid, now)
+    .run();
+
+  const columns = Object.keys(patch.patch);
+  const assignments = columns.map((column, index) => `${column} = ?${index + 2}`).join(', ');
+  const values = Object.values(patch.patch);
+  await c.env.DB.prepare(
+    `UPDATE group_settings SET ${assignments}, updated_at = ?${columns.length + 2} WHERE group_jid = ?1`
+  )
+    .bind(jid, ...values, now)
+    .run();
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_log (id, group_jid, actor_jid, action, target_jid, detail, created_at)
+     VALUES (?1, ?2, 'owner', 'settings.update', ?3, ?4, ?5)`
+  )
+    .bind(`au_${randomToken(12)}`, jid, jid, JSON.stringify(columns), now)
+    .run();
+
+  const settings = await c.env.DB.prepare(
+    `SELECT ${Object.keys(DEFAULT_GROUP_SETTINGS).join(', ')} FROM group_settings WHERE group_jid = ?1`
+  )
+    .bind(jid)
+    .first<GroupSettings>();
+
+  return ok(c, { group_jid: jid, settings: settings ?? DEFAULT_GROUP_SETTINGS });
+});
+
+/* --------------------------------- media: R2 --------------------------------- */
+
+app.post('/api/media', async (c) => {
+  if (!isSameOrigin(c)) {
+    return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  }
+
+  const session = await readSession(c);
+  if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!hasValidCsrf(c, session)) {
+    return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+  }
+
+  if (!c.env.FILES) {
+    return fail(c, 503, 'storage_unavailable', 'Penyimpanan media belum siap.');
+  }
+
+  let form: FormData;
+  try {
+    form = await c.req.formData();
+  } catch {
+    return fail(c, 400, 'invalid_request', 'Body harus multipart/form-data.');
+  }
+
+  const file = form.get('file');
+  if (!(file instanceof File)) {
+    return fail(c, 400, 'invalid_request', 'Field file wajib berisi berkas.');
+  }
+
+  if (file.size === 0) {
+    return fail(c, 400, 'invalid_request', 'Berkas kosong.');
+  }
+
+  if (file.size > MEDIA_MAX_BYTES) {
+    return fail(c, 413, 'payload_too_large', 'Ukuran media maksimal 2 MB.');
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const mime = detectImageMime(bytes);
+  if (!mime) {
+    return fail(c, 415, 'unsupported_media_type', 'Hanya PNG, JPEG, atau WebP yang diterima.');
+  }
+
+  const kindRaw = form.get('kind');
+  const kind = kindRaw === 'sticker' || kindRaw === 'icon' ? kindRaw : 'other';
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/jpeg' ? 'jpg' : 'webp';
+  const id = `med_${randomToken(12)}`;
+  const key = `media/${randomToken(16)}.${ext}`;
+  const now = Date.now();
+
+  await c.env.FILES.put(key, bytes, { httpMetadata: { contentType: mime } });
+
+  await c.env.DB.prepare(
+    `INSERT INTO media_files (id, r2_key, kind, mime, size_bytes, group_jid, created_by, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'owner', ?7)`
+  )
+    .bind(id, key, kind, mime, file.size, null, now)
+    .run();
+
+  return ok(c, { id, kind, mime, size_bytes: file.size, created_at: now }, 201);
+});
+
+app.get('/api/media/:id', async (c) => {
+  const session = await readSession(c);
+  if (!session) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  if (!(await sessionVersionValid(c, session))) {
+    return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  }
+
+  const row = await c.env.DB.prepare(
+    'SELECT id, kind, mime, size_bytes, created_at FROM media_files WHERE id = ?1'
+  )
+    .bind(c.req.param('id'))
+    .first<{ id: string; kind: string; mime: string; size_bytes: number; created_at: number }>();
+
+  if (!row) {
+    return fail(c, 404, 'not_found', 'Media tidak ditemukan.');
+  }
+
+  return ok(c, row);
+});
+
 /* -------------------------------- pairing: bot -------------------------------- */
 
 app.use('/api/bot/*', async (c, next) => {
@@ -698,6 +1197,35 @@ app.use('/api/bot/*', async (c, next) => {
   }
 
   await next();
+});
+
+app.post('/api/bot/heartbeat', async (c) => {
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+
+  const statusRaw = readField(parsed.body, 'status');
+  const appVersion = readField(parsed.body, 'app_version');
+  const allowedStatuses = ['unpaired', 'pairing', 'connected', 'disconnected', 'logged_out', 'error'];
+  const status = typeof statusRaw === 'string' && allowedStatuses.includes(statusRaw) ? statusRaw : null;
+
+  if (statusRaw !== undefined && status === null) {
+    return fail(c, 400, 'invalid_request', 'Status bot tidak valid.');
+  }
+
+  if (appVersion !== undefined && (typeof appVersion !== 'string' || appVersion.length > 32)) {
+    return fail(c, 400, 'invalid_request', 'app_version tidak valid.');
+  }
+
+  const now = Date.now();
+  await c.env.DB.prepare(
+    `UPDATE bots SET status = COALESCE(?2, status), last_seen_at = ?3,
+       app_version = COALESCE(?4, app_version), updated_at = ?3
+     WHERE id = ?1`
+  )
+    .bind(botId(c.env), status, now, typeof appVersion === 'string' ? appVersion : null)
+    .run();
+
+  return ok(c, { last_seen_at: now });
 });
 
 app.post('/api/bot/pair-requests/claim', async (c) => {
