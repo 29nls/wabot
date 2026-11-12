@@ -1567,89 +1567,6 @@ app.delete('/api/schedules/:id', async (c) => {
   return ok(c, { id, deleted: true });
 });
 
-app.get('/api/bot/schedules', async (c) => {
-  const now = Date.now();
-  const rows = await c.env.DB.prepare(
-    `SELECT s.id, s.group_jid, s.message, s.repeat_sec, s.next_run_at
-     FROM scheduled_messages s
-     JOIN groups g ON g.jid = s.group_jid AND g.bot_id = s.bot_id
-     WHERE s.bot_id = ?1 AND s.enabled = 1 AND s.next_run_at <= ?2
-     ORDER BY s.next_run_at ASC LIMIT 20`
-  )
-    .bind(botId(c.env), now)
-    .all();
-
-  return ok(c, { schedules: rows.results });
-});
-
-app.post('/api/bot/schedules/:id/executed', async (c) => {
-  const id = c.req.param('id');
-  const now = Date.now();
-  const row = await c.env.DB.prepare(
-    `SELECT id, repeat_sec FROM scheduled_messages WHERE id = ?1 AND bot_id = ?2`
-  )
-    .bind(id, botId(c.env))
-    .first<{ id: string; repeat_sec: number }>();
-  if (!row) return fail(c, 404, 'not_found', 'Jadwal tidak ditemukan.');
-
-  const parsed = await readJsonBody(c);
-  if (!parsed.ok) return parsed.response;
-  if (readField(parsed.body, 'ok') === false) {
-    await c.env.DB.prepare('UPDATE scheduled_messages SET last_run_at = ?2 WHERE id = ?1')
-      .bind(id, now)
-      .run();
-    return ok(c, { id, executed_at: now, retry: true });
-  }
-
-  const nextRunAt = row.repeat_sec > 0 ? now + row.repeat_sec * 1000 : now;
-  const enabled = row.repeat_sec > 0 ? 1 : 0;
-  await c.env.DB.prepare(
-    `UPDATE scheduled_messages SET last_run_at = ?2, next_run_at = ?3, enabled = ?4, updated_at = ?2
-     WHERE id = ?1`
-  )
-    .bind(id, now, nextRunAt, enabled)
-    .run();
-
-  return ok(c, { id, executed_at: now, next_run_at: nextRunAt, enabled: enabled === 1 });
-});
-
-app.post('/api/bot/maintenance', async (c) => {
-  const parsed = await readJsonBody(c);
-  if (!parsed.ok) return parsed.response;
-
-  const now = Date.now();
-  const hour = 60 * 60 * 1000;
-  const bot = botId(c.env);
-
-  const events = await c.env.DB.prepare('DELETE FROM events WHERE created_at < ?1')
-    .bind(now - 7 * 24 * hour)
-    .run();
-  const audit = await c.env.DB.prepare('DELETE FROM audit_log WHERE created_at < ?1')
-    .bind(now - 90 * 24 * hour)
-    .run();
-  const dailyStats = await c.env.DB.prepare('DELETE FROM daily_stats WHERE stat_date < ?1 AND bot_id = ?2')
-    .bind(new Date(now - 365 * 24 * hour).toISOString().slice(0, 10), bot)
-    .run();
-  const rateLimits = await c.env.DB.prepare('DELETE FROM rate_limits WHERE expires_at <= ?1')
-    .bind(now)
-    .run();
-  const idempotency = await c.env.DB.prepare(
-    'DELETE FROM bot_idempotency WHERE bot_id = ?1 AND expires_at <= ?2'
-  )
-    .bind(bot, now)
-    .run();
-  const mutes = await c.env.DB.prepare('DELETE FROM mutes WHERE until_at <= ?1').bind(now).run();
-
-  return ok(c, {
-    events: events.meta.changes,
-    audit: audit.meta.changes,
-    daily_stats: dailyStats.meta.changes,
-    rate_limits: rateLimits.meta.changes,
-    idempotency: idempotency.meta.changes,
-    mutes: mutes.meta.changes
-  });
-});
-
 /* --------------------------------- events ----------------------------------- */
 
 app.get('/api/events', async (c) => {
@@ -1872,6 +1789,90 @@ app.use('/api/bot/*', async (c, next) => {
 
   await next();
 });
+
+app.get('/api/bot/schedules', async (c) => {
+  const now = Date.now();
+  const rows = await c.env.DB.prepare(
+    `SELECT s.id, s.group_jid, s.message, s.repeat_sec, s.next_run_at
+     FROM scheduled_messages s
+     JOIN groups g ON g.jid = s.group_jid AND g.bot_id = s.bot_id
+     WHERE s.bot_id = ?1 AND s.enabled = 1 AND s.next_run_at <= ?2
+     ORDER BY s.next_run_at ASC LIMIT 20`
+  )
+    .bind(botId(c.env), now)
+    .all();
+
+  return ok(c, { schedules: rows.results });
+});
+
+app.post('/api/bot/schedules/:id/executed', async (c) => {
+  const id = c.req.param('id');
+  const now = Date.now();
+  const row = await c.env.DB.prepare(
+    `SELECT id, repeat_sec FROM scheduled_messages WHERE id = ?1 AND bot_id = ?2`
+  )
+    .bind(id, botId(c.env))
+    .first<{ id: string; repeat_sec: number }>();
+  if (!row) return fail(c, 404, 'not_found', 'Jadwal tidak ditemukan.');
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  if (readField(parsed.body, 'ok') === false) {
+    await c.env.DB.prepare('UPDATE scheduled_messages SET last_run_at = ?2 WHERE id = ?1')
+      .bind(id, now)
+      .run();
+    return ok(c, { id, executed_at: now, retry: true });
+  }
+
+  const nextRunAt = row.repeat_sec > 0 ? now + row.repeat_sec * 1000 : now;
+  const enabled = row.repeat_sec > 0 ? 1 : 0;
+  await c.env.DB.prepare(
+    `UPDATE scheduled_messages SET last_run_at = ?2, next_run_at = ?3, enabled = ?4, updated_at = ?2
+     WHERE id = ?1`
+  )
+    .bind(id, now, nextRunAt, enabled)
+    .run();
+
+  return ok(c, { id, executed_at: now, next_run_at: nextRunAt, enabled: enabled === 1 });
+});
+
+app.post('/api/bot/maintenance', async (c) => {
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const bot = botId(c.env);
+
+  const events = await c.env.DB.prepare('DELETE FROM events WHERE created_at < ?1')
+    .bind(now - 7 * 24 * hour)
+    .run();
+  const audit = await c.env.DB.prepare('DELETE FROM audit_log WHERE created_at < ?1')
+    .bind(now - 90 * 24 * hour)
+    .run();
+  const dailyStats = await c.env.DB.prepare('DELETE FROM daily_stats WHERE stat_date < ?1 AND bot_id = ?2')
+    .bind(new Date(now - 365 * 24 * hour).toISOString().slice(0, 10), bot)
+    .run();
+  const rateLimits = await c.env.DB.prepare('DELETE FROM rate_limits WHERE expires_at <= ?1')
+    .bind(now)
+    .run();
+  const idempotency = await c.env.DB.prepare(
+    'DELETE FROM bot_idempotency WHERE bot_id = ?1 AND expires_at <= ?2'
+  )
+    .bind(bot, now)
+    .run();
+  const mutes = await c.env.DB.prepare('DELETE FROM mutes WHERE until_at <= ?1').bind(now).run();
+
+  return ok(c, {
+    events: events.meta.changes,
+    audit: audit.meta.changes,
+    daily_stats: dailyStats.meta.changes,
+    rate_limits: rateLimits.meta.changes,
+    idempotency: idempotency.meta.changes,
+    mutes: mutes.meta.changes
+  });
+});
+
 
 app.post('/api/bot/heartbeat', async (c) => {
   const parsed = await readJsonBody(c);

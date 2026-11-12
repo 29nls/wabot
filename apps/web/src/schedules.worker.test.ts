@@ -240,6 +240,24 @@ describe('schedules CRUD', () => {
 });
 
 describe('schedules bot', () => {
+  it('GET schedules tanpa Bearer 401 dan tidak menyentuh D1', async () => {
+    const fake = scheduleDb();
+    const response = await jsonRequest('/api/bot/schedules', {}, fake.db);
+    expect(response.status).toBe(401);
+    expect(fake.calls.some((call) => call.sql.includes('scheduled_messages'))).toBe(false);
+  });
+
+  it('POST maintenance tanpa Bearer 401 tanpa satu pun DELETE', async () => {
+    const fake = scheduleDb();
+    const response = await jsonRequest(
+      '/api/bot/maintenance',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      fake.db
+    );
+    expect(response.status).toBe(401);
+    expect(fake.calls.some((call) => call.sql.startsWith('DELETE'))).toBe(false);
+  });
+
   it('GET hanya mengembalikan jadwal jatuh tempo milik bot', async () => {
     const fake = scheduleDb();
     const response = await jsonRequest('/api/bot/schedules', { headers: botHeaders() }, fake.db);
