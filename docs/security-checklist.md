@@ -22,12 +22,12 @@ Dokumen ini menurunkan 17 skill di [`security-skills-index.md`](./security-skill
 | Pairing dan auth state | 7 | 4 | 0 | 3 |
 | Rate limit | 6 | 3 | 2 | 1 |
 | Input, D1, dan R2 | 7 | 3 | 2 | 2 |
-| Dashboard dan XSS | 5 | 2 | 1 | 2 |
+| Dashboard dan XSS | 5 | 3 | 1 | 1 |
 | Logging dan audit | 5 | 2 | 1 | 2 |
 | Supply chain dan CI | 6 | 0 | 0 | 6 |
 | Privasi dan retensi | 5 | 1 | 3 | 1 |
 | Insiden dan operasi | 5 | 0 | 0 | 5 |
-| **Total** | **70** | **26** | **14** | **30** |
+| **Total** | **70** | **27** | **14** | **29** |
 
 Angka di atas adalah hitungan item pada dokumen ini, bukan skor keamanan.
 
@@ -198,7 +198,8 @@ Rujukan skill: `performing-web-application-penetration-test`, `conducting-api-se
   Bukti: `PairPage.tsx` menampilkan disclaimer sebelum formulir, disertai checkbox persetujuan yang wajib dicentang.
 - [x] **UI-06 (P1, Selesai lokal)** Tidak ada dead control atau navigasi ke fitur yang belum ada. Setiap tombol punya handler dan setiap tautan mengarah ke rute nyata.
   Bukti: nav `Shell.tsx` hanya memuat rute yang ada di `App.tsx`; command `mute` tanpa handler dihapus dari daftar UI; halaman `/schedules` dan `/logs` hidup. Klik antar halaman belum diuji.
-- [ ] **UI-07 (P1, Belum)** Uji XSS tersimpan pada nama grup, push name, template, dan nama file yang diunggah.
+- [x] **UI-07 (P1, Selesai lokal)** Uji XSS tersimpan pada nama grup, push name, template, dan nama file yang diunggah.
+  Bukti: `apps/web/src/xss.worker.test.ts` — payload `<img onerror>`/`<script>` masuk lewat `/api/bot/groups/sync`, PATCH settings, dan batch XP; dibaca kembali dari `/api/groups`, `/api/groups/:jid`, `/api/groups/:jid/members`, `/api/bot/config`. Server tidak mengubah nilai dan content-type tetap JSON. `apps/web/ui/src` tidak memuat `dangerouslySetInnerHTML`/`innerHTML`. Gap: nama berkas unggahan yang tampil di daftar media belum diuji karena UI belum menampilkannya; klik antar halaman di browser belum dilakukan.
 
 ## Logging dan audit
 
@@ -337,4 +338,4 @@ Yang harus terlihat: health 200 dengan `Cache-Control: no-store`; origin asing 4
 - 2026-11-10: tambah skill ke-17, `implementing-api-schema-validation-security`, untuk menutup DATA-02 dan DATA-03. Pencarian memastikan tidak ada skill khusus Hono, Workers, Wrangler, Miniflare, atau D1 di koleksi ini.
 - 2026-11-10: milestone pairing selesai. PAIR-01..04, API-06, dan RL-07 ditandai selesai terverifikasi lokal dan di origin preview. Endpoint `/api/pair-requests`, `/api/bot/pair-requests/*`, dan halaman `/pair` diuji dengan workerd lokal dan deploy preview.
 
-- 2026-11-12: M5 (interaktif dan hardening) selesai lokal. Baru dicentang: WEB-06 (HSTS kondisional), WEB-07, WEB-08, API-02, DATA-03, DATA-04, LOG-05, AUTH-06, UI-05, UI-06. RL-08 dan PRV-02..03 turun ke Sebagian karena pemicunya daemon bot, bukan jadwal Workers. UI-07 tetap Belum: belum ada uji XSS tersimpan untuk nama grup, push name, template, dan nama berkas. Secara total 26 selesai lokal, 14 sebagian, 30 belum. `npm run typecheck` lulus, `npm test` 125 web + 33 bot lulus, dan `npm run build:site` lulus.
+- 2026-11-12: M5 (interaktif dan hardening) selesai lokal. Baru dicentang: WEB-06 (HSTS kondisional), WEB-07, WEB-08, API-02, DATA-03, DATA-04, LOG-05, AUTH-06, UI-05, UI-06. RL-08 dan PRV-02..03 turun ke Sebagian karena pemicunya daemon bot, bukan jadwal Workers. UI-07 lalu selesai pada commit berikutnya (uji XSS tersimpan). Secara total 27 selesai lokal, 14 sebagian, 29 belum. `npm run typecheck` lulus dan `npm test` 130 web + 33 bot lulus.
