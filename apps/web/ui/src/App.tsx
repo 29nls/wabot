@@ -15,6 +15,7 @@ import { GroupsPage } from './GroupsPage';
 import { GroupDetailPage } from './GroupDetailPage';
 import { CommandsPage } from './CommandsPage';
 import { LogsPage } from './LogsPage';
+import { SchedulerPage } from './SchedulerPage';
 import { SettingsPage } from './SettingsPage';
 
 type View =
@@ -490,6 +491,7 @@ export function App() {
       path === '/groups' ||
       path.startsWith('/groups/') ||
       path === '/commands' ||
+      path === '/schedules' ||
       path === '/logs' ||
       path === '/settings';
     if (view.kind === 'authenticated' && !knownPath) {
@@ -597,6 +599,14 @@ export function App() {
     return (
       <AppShell path="/commands" version="v0.1.0" loggingOut={false} onLogout={() => { void logout(view.session.csrf_token).finally(goToLogin); }} onNavigate={navigate}>
         <CommandsPage session={view.session} onNavigate={navigate} />
+      </AppShell>
+    );
+  }
+
+  if (path === '/schedules') {
+    return (
+      <AppShell path="/schedules" version="v0.1.0" loggingOut={false} onLogout={() => { void logout(view.session.csrf_token).finally(goToLogin); }} onNavigate={navigate}>
+        <SchedulerPage session={view.session} />
       </AppShell>
     );
   }

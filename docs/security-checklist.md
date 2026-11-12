@@ -16,18 +16,18 @@ Dokumen ini menurunkan 17 skill di [`security-skills-index.md`](./security-skill
 | Area | P0 | Selesai lokal | Sebagian | Belum |
 | --- | ---: | ---: | ---: | ---: |
 | Secret dan konfigurasi | 6 | 2 | 1 | 3 |
-| Login dan sesi | 6 | 4 | 1 | 1 |
-| CSRF dan header | 6 | 4 | 2 | 0 |
-| API bot dan otorisasi | 6 | 1 | 0 | 5 |
+| Login dan sesi | 6 | 5 | 1 | 0 |
+| CSRF dan header | 6 | 6 | 0 | 0 |
+| API bot dan otorisasi | 6 | 2 | 0 | 4 |
 | Pairing dan auth state | 7 | 4 | 0 | 3 |
-| Rate limit | 6 | 3 | 1 | 2 |
-| Input, D1, dan R2 | 7 | 1 | 2 | 4 |
-| Dashboard dan XSS | 5 | 1 | 1 | 3 |
-| Logging dan audit | 5 | 1 | 1 | 3 |
+| Rate limit | 6 | 3 | 2 | 1 |
+| Input, D1, dan R2 | 7 | 3 | 2 | 2 |
+| Dashboard dan XSS | 5 | 2 | 1 | 2 |
+| Logging dan audit | 5 | 2 | 1 | 2 |
 | Supply chain dan CI | 6 | 0 | 0 | 6 |
-| Privasi dan retensi | 5 | 1 | 1 | 3 |
+| Privasi dan retensi | 5 | 1 | 3 | 1 |
 | Insiden dan operasi | 5 | 0 | 0 | 5 |
-| **Total** | **70** | **22** | **10** | **38** |
+| **Total** | **70** | **26** | **14** | **30** |
 
 Angka di atas adalah hitungan item pada dokumen ini, bukan skor keamanan.
 
@@ -81,8 +81,8 @@ Rujukan skill: `testing-api-authentication-weaknesses`, `hunting-credential-stuf
   Bukti: `signSession()`, `verifySession()`; `auth.test.ts`.
 - [ ] **AUTH-05 (P0, Sebagian)** Logout menghapus cookie, tetapi belum menaikkan `session_version`. Sesi lama yang sudah disalin tetap valid sampai `exp`.
   Gap: tambah tabel atau kolom versi sesi, sertakan di payload, dan tolak sesi dengan versi lama. Uji dengan dua cookie: setelah logout, cookie lama harus 401.
-- [ ] **AUTH-06 (P0, Belum)** Tidak ada endpoint yang membocorkan keberadaan sesi. Semua respons privat 401 dengan envelope yang sama, tanpa membedakan pengguna.
-  Verifikasi: bandingkan `/api/session` tanpa cookie dan dengan cookie rusak; keduanya 401 `unauthorized`.
+- [x] **AUTH-06 (P0, Selesai lokal)** Tidak ada endpoint yang membocorkan keberadaan sesi. Semua respons privat 401 dengan envelope yang sama, tanpa membedakan pengguna.
+  Bukti: `schedules.worker.test.ts` membandingkan `/api/session` tanpa cookie dan dengan cookie rusak; keduanya 401 `unauthorized` dengan envelope identik.
 - [ ] **AUTH-07 (P1, Belum)** Sesi kedaluwarsa diuji dengan jam mundur dan cookie yang dimodifikasi. Tidak ada sesi yang diterima setelah `exp` atau setelah tanda tangan diubah.
   Verifikasi: ubah satu karakter payload dan signature; keduanya harus 401.
 - [ ] **AUTH-08 (P1, Belum)** Tidak ada session fixation: token dibuat ulang setelah login, dan token pra-login tidak diterima.
@@ -102,12 +102,12 @@ Rujukan skill: `performing-web-application-penetration-test`, `securing-serverle
   Bukti: middleware `securityHeaders`; `worker.test.ts` memeriksa CSP dan nosniff.
 - [ ] **WEB-05 (P0, Sebagian)** CSP melarang script inline (`script-src 'self'`), tetapi masih mengizinkan `style-src 'unsafe-inline'`. PRD hanya melarang unsafe-inline untuk script, jadi ini dapat diterima untuk MVP jika tidak ada HTML yang disisipkan dari input pengguna.
   Verifikasi: `rg -n "dangerouslySetInnerHTML|innerHTML" apps/web/ui/src` tidak menemukan penggunaan.
-- [ ] **WEB-06 (P0, Sebagian)** HSTS belum diset. Wajib ditambahkan untuk respons HTTPS produksi setelah domain final diketahui.
-  Verifikasi produksi: `Strict-Transport-Security: max-age=31536000; includeSubDomains` pada respons HTTPS.
-- [ ] **WEB-07 (P1, Belum)** Semua respons API privat memakai `Cache-Control: no-store`, termasuk 401, 403, dan 500.
-  Bukti: middleware sudah menset untuk path `/api/`, tetapi belum ada uji untuk respons error. Tambahkan uji 401 dan 403.
-- [ ] **WEB-08 (P1, Belum)** `Content-Type: application/json` wajib untuk mutasi JSON, dan body dengan tipe lain ditolak 415.
-  Verifikasi: kirim `text/plain` ke login; harus 415, bukan diproses.
+- [x] **WEB-06 (P0, Selesai lokal)** HSTS `Strict-Transport-Security: max-age=31536000; includeSubDomains` diset hanya untuk request berskema `https`, sehingga `http://localhost` saat dev tidak dipaku browser.
+  Bukti: `schedules.worker.test.ts` (https mendapat HSTS, http lokal tidak). Verifikasi produksi menunggu domain final.
+- [x] **WEB-07 (P1, Selesai lokal)** Semua respons API privat memakai `Cache-Control: no-store`, termasuk 401, 403, dan 500.
+  Bukti: middleware `/api/`; uji respons sukses dan 401 di `schedules.worker.test.ts`. Uji khusus 403 belum ada.
+- [x] **WEB-08 (P1, Selesai lokal)** `Content-Type: application/json` wajib untuk mutasi JSON, dan body dengan tipe lain ditolak 415.
+  Bukti: `readJsonBody()` menolak tipe bukan JSON dengan 415, termasuk saat body berdeklarasi 0 byte; body kosong tanpa header tipe tetap diterima (logout). Uji `schedules.worker.test.ts`.
 
 ## API bot dan otorisasi
 
@@ -115,8 +115,8 @@ Rujukan skill: `testing-api-for-broken-object-level-authorization`, `implementin
 
 - [ ] **API-01 (P0, Belum)** Semua `/api/bot/*` memakai middleware Bearer yang membandingkan hash kunci secara waktu konstan dan menolak request tanpa header dengan 401.
   Verifikasi: tanpa header, header kosong, dan kunci acak harus 401; kunci valid harus masuk handler.
-- [ ] **API-02 (P0, Belum)** `bot_id` diambil dari kunci atau konteks server, bukan dari body klien. Body yang menyebut bot lain ditolak 403.
-  Verifikasi: kirim `bot_id: bot_2` dengan kunci `bot_1`; harus 403.
+- [x] **API-02 (P0, Selesai lokal)** `bot_id` diambil dari kunci atau konteks server, bukan dari body klien. Body yang menyebut bot lain ditolak 403.
+  Bukti: middleware `/api/bot/*` membaca body lalu menolak `bot_id` yang berbeda dari konteks Bearer dengan `403 bot_scope_mismatch`; handler tetap memakai `readJsonBody` normal. Uji `schedules.worker.test.ts` (`bot_id: bot_other` + kunci `bot_1`).
 - [ ] **API-03 (P0, Belum)** Setiap query grup dan anggota discope ke `bot_id` yang berhak. `group_jid` dari request tidak dipercaya sebagai bukti kepemilikan.
   Verifikasi: buat dua bot dan dua grup; akses silang harus 404 atau 403, bukan data bot lain.
 - [ ] **API-04 (P0, Belum)** Endpoint bot tidak mengembalikan kredensial, isi pesan, atau nomor penuh. `phone_jid` dimasking sebelum keluar dari server.
@@ -162,7 +162,8 @@ Rujukan skill: `implementing-api-rate-limiting-and-throttling`, `hunting-credent
 - [ ] **RL-06 (P0, Belum)** Unggah media dibatasi 10 per jam per pengguna, dan penolakan tidak menulis objek ke R2.
 - [x] **RL-07 (P1, Selesai lokal)** Pairing dibatasi 3 per 15 menit per bot dan 30 detik cooldown, terpisah dari rate limit login.
   Bukti: `consumeRateLimit(db, \`pair:${botId}\`, 3, 15*60*1000)` di handler pairing dan cooldown `pair:<botId>:cooldown` 30 detik di `worker.ts`; diuji pada `pairing.worker.test.ts` dan endpoint lokal.
-- [ ] **RL-08 (P1, Belum)** Pembersihan baris `rate_limits` yang kedaluwarsa berjalan berkala agar D1 tidak tumbuh tanpa batas.
+- [ ] **RL-08 (P1, Sebagian)** Baris `rate_limits` kedaluwarsa dihapus di `POST /api/bot/maintenance` agar D1 tidak tumbuh tanpa batas.
+  Gap: pemicunya daemon bot, bukan jadwal Workers; jika daemon mati, pembersihan berhenti.
 
 ## Input, D1, dan R2
 
@@ -172,9 +173,10 @@ Rujukan skill: `exploiting-sql-injection-vulnerabilities`, `securing-serverless-
   Bukti: `apps/web/src/auth.ts`, `worker.ts`. Verifikasi: `rg -n "prepare\(` dan tinjau setiap query.
 - [ ] **DATA-02 (P0, Sebagian)** Validasi input login membatasi panjang password 200 karakter dan body 4 KB. Validasi untuk endpoint lain belum ada.
   Gap: skema validasi bersama untuk pairing, settings, command, dan upload.
-- [ ] **DATA-03 (P0, Belum)** `PATCH` menolak field tak dikenal dan hanya mengizinkan subset field yang didokumentasikan. Uji dengan field `bot_id` atau `group_jid` yang disisipkan.
-- [ ] **DATA-04 (P0, Belum)** Unggah media: whitelist MIME `image/png`, `image/jpeg`, `image/webp`, cek magic bytes, maksimum 2 MB, dan nama file dibuat server (tidak memakai nama klien).
-  Verifikasi: unggah file `.png` yang berisi teks; harus 415. Unggah 2 MB + 1 byte; harus 413.
+- [x] **DATA-03 (P0, Selesai lokal)** `PATCH` menolak field tak dikenal dan hanya mengizinkan subset field yang didokumentasikan.
+  Bukti: PATCH jadwal hanya menerima `message`, `next_run_at`, `repeat_sec`, `enabled`; field lain 400. `POST` jadwal juga menolak field tak dikenal. Uji `schedules.worker.test.ts` (`bot_id` disisipkan).
+- [x] **DATA-04 (P0, Selesai lokal)** Unggah media: whitelist MIME `image/png`, `image/jpeg`, `image/webp`, cek magic bytes, maksimum 2 MB, dan nama file dibuat server (tidak memakai nama klien).
+  Bukti: `media.worker.test.ts` — tipe di luar whitelist 415, magic bytes tidak cocok walau `Content-Type` PNG 415, lewat 2 MB 413 tanpa menulis R2. Nama objek R2 memakai ID acak.
 - [ ] **DATA-05 (P0, Belum)** Kunci R2 dibuat dari ID acak, bukan dari nama file atau JID. Objek privat, tanpa akses langsung tanpa otorisasi.
 - [x] **DATA-06 (P0, Selesai)** Migrasi idempoten dan bisa dijalankan pada database kosong dari dalam Worker.
   Bukti: `migrations/0001_init.sql`, `0002_auth_rate_limits.sql`; `ensureSchema` mencatat versi di `schema_migrations` dan menerapkan semuanya dalam satu `db.batch()`. Diuji pada D1 lokal kosong lewat `wrangler dev` dengan `SCHEMA_BOOTSTRAP=true`: `/api/health` `schema: missing` → login `200` → `schema: ok` → pemanggilan kedua `applied: []`; 12 tabel terbentuk dan `schema_migrations` berisi versi 1 dan 2. Tanpa flag, login menjawab `503 schema_missing`; tanpa sesi `401`; origin asing `403`. Sudah diverifikasi juga pada D1 Sites sungguhan (environment preview): `schema: missing` → login `200` → `schema: ok` dengan 12 tabel dan versi 1–2 tercatat; flag dimatikan setelah bootstrap.
@@ -192,8 +194,10 @@ Rujukan skill: `performing-web-application-penetration-test`, `conducting-api-se
   Bukti: uji browser lokal pada 360 px; `apps/web/ui/src/styles.css`.
 - [ ] **UI-03 (P0, Belum)** Semua halaman baru punya state loading, kosong, dan error, serta tidak menampilkan data contoh sebagai data nyata.
 - [ ] **UI-04 (P0, Belum)** Template pesan dan nama grup di-escape saat ditampilkan; tidak ada URL `javascript:` yang bisa dirender dari input pengguna.
-- [ ] **UI-05 (P0, Belum)** Disclaimer risiko WhatsApp tidak resmi tampil sebelum pairing, bukan hanya di halaman pengaturan.
-- [ ] **UI-06 (P1, Belum)** Tidak ada dead control atau navigasi ke fitur yang belum ada. Setiap tombol punya handler dan setiap tautan mengarah ke rute nyata.
+- [x] **UI-05 (P0, Selesai lokal)** Disclaimer risiko WhatsApp tidak resmi tampil sebelum pairing, bukan hanya di halaman pengaturan.
+  Bukti: `PairPage.tsx` menampilkan disclaimer sebelum formulir, disertai checkbox persetujuan yang wajib dicentang.
+- [x] **UI-06 (P1, Selesai lokal)** Tidak ada dead control atau navigasi ke fitur yang belum ada. Setiap tombol punya handler dan setiap tautan mengarah ke rute nyata.
+  Bukti: nav `Shell.tsx` hanya memuat rute yang ada di `App.tsx`; command `mute` tanpa handler dihapus dari daftar UI; halaman `/schedules` dan `/logs` hidup. Klik antar halaman belum diuji.
 - [ ] **UI-07 (P1, Belum)** Uji XSS tersimpan pada nama grup, push name, template, dan nama file yang diunggah.
 
 ## Logging dan audit
@@ -207,7 +211,8 @@ Rujukan skill: `analyzing-api-gateway-access-logs`, `containing-active-breach`, 
 - [ ] **LOG-03 (P0, Belum)** Setiap kick, mute, ubah setting, dan rotasi kunci menghasilkan baris `audit_log` dengan aktor, target, aksi, dan waktu.
   Verifikasi: lakukan aksi di grup uji, lalu baca `audit_log`; jumlah baris harus bertambah satu per aksi.
 - [ ] **LOG-04 (P0, Belum)** Audit log tidak bisa diubah atau dihapus dari API dashboard. Hanya penambahan yang diizinkan.
-- [ ] **LOG-05 (P0, Belum)** Akses `/api/bot/*` yang ditolak dicatat dengan kunci yang dimasking dan alasan penolakan, tanpa mencatat kunci asli.
+- [x] **LOG-05 (P0, Selesai lokal)** Akses `/api/bot/*` yang ditolak dicatat dengan kunci yang dimasking dan alasan penolakan, tanpa mencatat kunci asli.
+  Bukti: `logBotRejection()` + `maskKey()` menulis event `bot_auth`; uji `schedules.worker.test.ts` memastikan kunci asli tidak muncul di baris log.
 - [ ] **LOG-06 (P1, Belum)** Event log memakai level dan scope yang konsisten, serta dapat difilter tanpa memuat isi pesan.
 - [ ] **LOG-07 (P1, Belum)** Alert sederhana untuk lonjakan 401/403/429 dan kegagalan login berulang, minimal lewat tinjauan log harian.
 
@@ -232,9 +237,10 @@ Rujukan skill: `performing-privacy-impact-assessment`.
 
 - [x] **PRV-01 (P0, Selesai lokal)** Skema tidak menyimpan isi pesan secara default: `group_settings.message_log` bernilai `0` dan `members` hanya menyimpan `push_name`.
   Bukti: `migrations/0001_init.sql`.
-- [ ] **PRV-02 (P0, Sebagian)** Retensi baru ditetapkan di PRD, belum dijalankan: `events` 7 hari, `audit_log` 90 hari, `daily_stats` 365 hari, backup sesi 3 versi.
-  Gap: job pembersihan dan uji bahwa data lebih lama benar-benar terhapus.
-- [ ] **PRV-03 (P0, Belum)** Job retensi berjalan terjadwal dan idempoten, dengan jumlah baris yang dihapus dicatat tanpa memuat data pribadi.
+- [ ] **PRV-02 (P0, Sebagian)** Retensi dijalankan `POST /api/bot/maintenance`: `events` 7 hari, `audit_log` 90 hari, `daily_stats` 365 hari, dengan uji di `schedules.worker.test.ts`.
+  Gap: dipicu daemon bot, bukan jadwal Workers; backup sesi 3 versi belum ada.
+- [ ] **PRV-03 (P0, Sebagian)** Job retensi idempoten dan mengembalikan jumlah baris yang dihapus tanpa data pribadi.
+  Gap: belum terjadwal di Worker; daemon memanggilnya maksimal sekali per 24 jam.
 - [ ] **PRV-04 (P0, Belum)** Tersedia `POST /api/groups/:jid/purge` (P1 di PRD, tetapi P0 untuk pilot) yang menghapus settings, member, command, dan media grup, serta mencatat audit penghapusan.
 - [ ] **PRV-05 (P0, Belum)** PIA ringkas mendokumentasikan aliran data: apa yang dikumpulkan, dasar pemrosesan, masa retensi, siapa yang dapat mengakses, dan cara menghapus.
 - [ ] **PRV-06 (P1, Belum)** Dokumentasi retensi tersedia untuk pengguna dan menyebut UU PDP, bukan hanya GDPR.
@@ -331,3 +337,4 @@ Yang harus terlihat: health 200 dengan `Cache-Control: no-store`; origin asing 4
 - 2026-11-10: tambah skill ke-17, `implementing-api-schema-validation-security`, untuk menutup DATA-02 dan DATA-03. Pencarian memastikan tidak ada skill khusus Hono, Workers, Wrangler, Miniflare, atau D1 di koleksi ini.
 - 2026-11-10: milestone pairing selesai. PAIR-01..04, API-06, dan RL-07 ditandai selesai terverifikasi lokal dan di origin preview. Endpoint `/api/pair-requests`, `/api/bot/pair-requests/*`, dan halaman `/pair` diuji dengan workerd lokal dan deploy preview.
 
+- 2026-11-12: M5 (interaktif dan hardening) selesai lokal. Baru dicentang: WEB-06 (HSTS kondisional), WEB-07, WEB-08, API-02, DATA-03, DATA-04, LOG-05, AUTH-06, UI-05, UI-06. RL-08 dan PRV-02..03 turun ke Sebagian karena pemicunya daemon bot, bukan jadwal Workers. UI-07 tetap Belum: belum ada uji XSS tersimpan untuk nama grup, push name, template, dan nama berkas. Secara total 26 selesai lokal, 14 sebagian, 30 belum. `npm run typecheck` lulus, `npm test` 125 web + 33 bot lulus, dan `npm run build:site` lulus.

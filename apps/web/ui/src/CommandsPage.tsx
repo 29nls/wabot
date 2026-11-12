@@ -87,6 +87,16 @@ export function CommandsPage({ session, onNavigate }: { session: SessionData; on
       <p className="section-kicker">Command</p>
       <h1>Custom command grup</h1>
 
+      <section aria-labelledby="builtin-title">
+        <h2 id="builtin-title">Command bawaan P1</h2>
+        <ul>
+          <li><span className="mono-value">.poll "Pertanyaan" "Opsi A" "Opsi B"</span> — kirim polling.</li>
+          <li><span className="mono-value">.sticker</span> — balas gambar atau video dengan command ini.</li>
+          <li><span className="mono-value">.tebak</span> — mulai ronde tebak kata 60 detik.</li>
+          <li><span className="mono-value">.jawab &lt;kata&gt;</span> — jawab ronde aktif, benar dapat 25 XP.</li>
+        </ul>
+      </section>
+
       <label htmlFor="group">Grup</label>
       <select id="group" value={groupJid} onChange={(e) => setGroupJid(e.target.value)}>
         {groups.map((group) => (

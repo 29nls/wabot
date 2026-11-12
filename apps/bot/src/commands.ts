@@ -25,10 +25,13 @@ export const COMMAND_NAMES = [
   'antilink',
   'antispam',
   'kick',
-  'mute',
   'level',
   'top',
   'addcmd',
   'delcmd',
-  'help'
+  'help',
+  'poll',
+  'sticker',
+  'tebak',
+  'jawab'
 ] as const;

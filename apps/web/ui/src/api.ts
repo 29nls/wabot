@@ -333,6 +333,58 @@ export function deleteCommand(
   });
 }
 
+export interface ScheduleItem {
+  id: string;
+  group_jid: string;
+  message: string;
+  next_run_at: number;
+  repeat_sec: number;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+  last_run_at: number | null;
+}
+
+export function getSchedules(
+  jid: string
+): Promise<ApiResult<ScheduleItem[]>> {
+  return request<ScheduleItem[]>(`/api/groups/${encodeURIComponent(jid)}/schedules`);
+}
+
+export function createSchedule(
+  csrfToken: string,
+  jid: string,
+  input: { message: string; next_run_at: number; repeat_sec: number; enabled: boolean }
+): Promise<ApiResult<{ id: string }>> {
+  return request(`/api/groups/${encodeURIComponent(jid)}/schedules`, {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateSchedule(
+  csrfToken: string,
+  id: string,
+  patch: { message?: string; next_run_at?: number; repeat_sec?: number; enabled?: boolean }
+): Promise<ApiResult<{ id: string }>> {
+  return request(`/api/schedules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(patch)
+  });
+}
+
+export function deleteSchedule(
+  csrfToken: string,
+  id: string
+): Promise<ApiResult<{ id: string; deleted: boolean }>> {
+  return request(`/api/schedules/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken }
+  });
+}
+
 export interface EventItem {
   id: string;
   level: string;

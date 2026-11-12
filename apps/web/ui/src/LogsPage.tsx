@@ -6,19 +6,30 @@ export function LogsPage({ session: _session }: { session: SessionData }) {
   const [level, setLevel] = useState('');
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
 
-  const load = useCallback(async () => {
-    setState('loading');
-    const result = await getEvents(level || undefined, 100);
-    if (result.status === 200 && result.body?.ok) {
-      setEvents(result.body.data.events);
-      setState('ready');
-    } else {
-      setState('error');
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setState('loading');
+    try {
+      const result = await getEvents(level || undefined, 100);
+      if (result.status === 200 && result.body?.ok) {
+        setEvents(result.body.data.events);
+        setState('ready');
+      } else if (!silent) {
+        setState('error');
+      }
+    } catch {
+      if (!silent) setState('error');
     }
   }, [level]);
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') void load(true);
+    }, 3000);
+    return () => clearInterval(id);
   }, [load]);
 
   function download() {
@@ -43,6 +54,7 @@ export function LogsPage({ session: _session }: { session: SessionData }) {
         <option value="warn">warn</option>
         <option value="error">error</option>
       </select>
+      <p className="field-help">Diperbarui otomatis tiap 3 detik saat tab aktif.</p>
       <button type="button" className="ghost-button" onClick={() => void load()}>
         Muat ulang
       </button>

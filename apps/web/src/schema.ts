@@ -3,9 +3,10 @@ import initSchema from '../../../migrations/0001_init.sql';
 import rateLimitSchema from '../../../migrations/0002_auth_rate_limits.sql';
 import sessionVersionSchema from '../../../migrations/0003_session_version.sql';
 import botRuntimeSchema from '../../../migrations/0004_bot_runtime.sql';
+import interactiveSchema from '../../../migrations/0005_interactive.sql';
 
 // Versi skema yang diharapkan kode ini. Naikkan setiap kali migrasi baru ditambahkan.
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const LOCK_NAME = 'schema_bootstrap';
 const LOCK_TTL_MS = 60 * 1000;
@@ -20,7 +21,8 @@ export const MIGRATIONS: Migration[] = [
   { version: 1, name: '0001_init', sql: initSchema },
   { version: 2, name: '0002_auth_rate_limits', sql: rateLimitSchema },
   { version: 3, name: '0003_session_version', sql: sessionVersionSchema },
-  { version: 4, name: '0004_bot_runtime', sql: botRuntimeSchema }
+  { version: 4, name: '0004_bot_runtime', sql: botRuntimeSchema },
+  { version: 5, name: '0005_interactive', sql: interactiveSchema }
 ];
 
 /**

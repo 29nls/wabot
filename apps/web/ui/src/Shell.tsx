@@ -11,6 +11,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Ringkasan' },
   { path: '/pair', label: 'Pairing' },
   { path: '/groups', label: 'Grup' },
+  { path: '/schedules', label: 'Jadwal' },
   { path: '/commands', label: 'Command' },
   { path: '/logs', label: 'Log' },
   { path: '/settings', label: 'Pengaturan' }

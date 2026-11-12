@@ -183,6 +183,22 @@ export function createBotApiClient(options: BotApiClientOptions) {
       entries: Array<{ level: string; scope: string; message: string; meta?: string | null }>
     ): Promise<unknown> {
       return request('/api/bot/events', { entries });
+    },
+
+    async getSchedules(): Promise<{
+      schedules: Array<{ id: string; group_jid: string; message: string; next_run_at: number; repeat_sec: number }>;
+    }> {
+      return get('/api/bot/schedules') as Promise<{
+        schedules: Array<{ id: string; group_jid: string; message: string; next_run_at: number; repeat_sec: number }>;
+      }>;
+    },
+
+    async reportExecuted(id: string, ok: boolean): Promise<unknown> {
+      return request(`/api/bot/schedules/${encodeURIComponent(id)}/executed`, { ok });
+    },
+
+    async runMaintenance(): Promise<unknown> {
+      return request('/api/bot/maintenance', {});
     }
   };
 }

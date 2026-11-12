@@ -156,6 +156,14 @@ async function readJsonBody(c: AppContext): Promise<{ ok: true; body: unknown } 
     };
   }
 
+  const contentType = (c.req.header('content-type') ?? '').split(';')[0].trim().toLowerCase();
+  if ((declaredLength > 0 || contentType) && contentType !== 'application/json') {
+    return {
+      ok: false,
+      response: fail(c, 415, 'unsupported_media_type', 'Content-Type harus application/json.')
+    };
+  }
+
   let text: string;
   try {
     text = await c.req.text();
@@ -446,7 +454,12 @@ app.use('*', async (c, next) => {
   const headers = new Headers(c.res.headers);
   for (const [name, value] of Object.entries(securityHeaders)) headers.set(name, value);
 
-  const path = new URL(c.req.url).pathname;
+  const requestUrl = new URL(c.req.url);
+  if (requestUrl.protocol === 'https:') {
+    headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+
+  const path = requestUrl.pathname;
   if (path.startsWith('/api/')) {
     headers.set('Cache-Control', 'no-store');
   } else if (path.startsWith('/assets/')) {
@@ -1383,6 +1396,260 @@ app.delete('/api/commands/:id', async (c) => {
   return ok(c, { id, deleted: true });
 });
 
+/* -------------------------------- schedules --------------------------------- */
+
+const SCHEDULE_MAX_REPEAT_SEC = 30 * 24 * 60 * 60;
+
+app.get('/api/groups/:jid/schedules', async (c) => {
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+
+  const groupJid = c.req.param('jid');
+  const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+    .bind(groupJid, botId(c.env))
+    .first<{ jid: string }>();
+  if (!group) return fail(c, 404, 'not_found', `Grup ${groupJid} tidak ditemukan.`);
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, group_jid, message, next_run_at, repeat_sec, enabled, created_at, updated_at, last_run_at
+     FROM scheduled_messages WHERE bot_id = ?1 AND group_jid = ?2
+     ORDER BY next_run_at ASC LIMIT 200`
+  )
+    .bind(botId(c.env), groupJid)
+    .all();
+
+  return ok(c, rows.results);
+});
+
+app.post('/api/groups/:jid/schedules', async (c) => {
+  if (!isSameOrigin(c)) return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!hasValidCsrf(c, session)) return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+
+  const groupJid = c.req.param('jid');
+  const bot = botId(c.env);
+  const group = await c.env.DB.prepare('SELECT jid FROM groups WHERE jid = ?1 AND bot_id = ?2')
+    .bind(groupJid, bot)
+    .first<{ jid: string }>();
+  if (!group) return fail(c, 404, 'not_found', `Grup ${groupJid} tidak ditemukan.`);
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!['message', 'next_run_at', 'repeat_sec', 'enabled'].includes(key)) {
+      return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+    }
+  }
+
+  const message = record.message;
+  if (typeof message !== 'string' || message.trim().length === 0 || message.length > 1000) {
+    return fail(c, 400, 'invalid_request', 'message maksimal 1000 karakter.');
+  }
+  const nextRunAt = record.next_run_at;
+  if (typeof nextRunAt !== 'number' || !Number.isInteger(nextRunAt) || nextRunAt <= 0) {
+    return fail(c, 400, 'invalid_request', 'next_run_at harus timestamp milidetik.');
+  }
+  const repeatSec = record.repeat_sec ?? 0;
+  if (typeof repeatSec !== 'number' || !Number.isInteger(repeatSec) || repeatSec < 0 || repeatSec > SCHEDULE_MAX_REPEAT_SEC) {
+    return fail(c, 400, 'invalid_request', 'repeat_sec tidak valid.');
+  }
+  const enabled = record.enabled ?? true;
+  if (typeof enabled !== 'boolean') return fail(c, 400, 'invalid_request', 'enabled harus boolean.');
+
+  const id = `sm_${randomToken(12)}`;
+  const now = Date.now();
+  await c.env.DB.prepare(
+    `INSERT INTO scheduled_messages
+       (id, bot_id, group_jid, message, next_run_at, repeat_sec, enabled, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`
+  )
+    .bind(id, bot, groupJid, message.trim(), nextRunAt, repeatSec, enabled ? 1 : 0, now)
+    .run();
+
+  return ok(
+    c,
+    { id, group_jid: groupJid, message: message.trim(), next_run_at: nextRunAt, repeat_sec: repeatSec, enabled },
+    201
+  );
+});
+
+async function findSchedule(c: AppContext, id: string, bot: string): Promise<Response | { id: string }> {
+  const row = await c.env.DB.prepare('SELECT id FROM scheduled_messages WHERE id = ?1 AND bot_id = ?2')
+    .bind(id, bot)
+    .first<{ id: string }>();
+  return row ?? fail(c, 404, 'not_found', 'Jadwal tidak ditemukan.');
+}
+
+app.patch('/api/schedules/:id', async (c) => {
+  if (!isSameOrigin(c)) return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!hasValidCsrf(c, session)) return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+
+  const id = c.req.param('id');
+  const found = await findSchedule(c, id, botId(c.env));
+  if (found instanceof Response) return found;
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return fail(c, 400, 'invalid_request', 'Body harus objek JSON.');
+  }
+  const record = body as Record<string, unknown>;
+  const allowed = ['message', 'next_run_at', 'repeat_sec', 'enabled'];
+  for (const key of Object.keys(record)) {
+    if (!allowed.includes(key)) return fail(c, 400, 'invalid_request', `Field tidak dikenal: ${key}.`);
+  }
+
+  const patch: Record<string, string | number> = {};
+  if (record.message !== undefined) {
+    if (typeof record.message !== 'string' || record.message.trim().length === 0 || record.message.length > 1000) {
+      return fail(c, 400, 'invalid_request', 'message maksimal 1000 karakter.');
+    }
+    patch.message = record.message.trim();
+  }
+  if (record.next_run_at !== undefined) {
+    if (typeof record.next_run_at !== 'number' || !Number.isInteger(record.next_run_at) || record.next_run_at <= 0) {
+      return fail(c, 400, 'invalid_request', 'next_run_at harus timestamp milidetik.');
+    }
+    patch.next_run_at = record.next_run_at;
+  }
+  if (record.repeat_sec !== undefined) {
+    if (
+      typeof record.repeat_sec !== 'number' ||
+      !Number.isInteger(record.repeat_sec) ||
+      record.repeat_sec < 0 ||
+      record.repeat_sec > SCHEDULE_MAX_REPEAT_SEC
+    ) {
+      return fail(c, 400, 'invalid_request', 'repeat_sec tidak valid.');
+    }
+    patch.repeat_sec = record.repeat_sec;
+  }
+  if (record.enabled !== undefined) {
+    if (typeof record.enabled !== 'boolean') return fail(c, 400, 'invalid_request', 'enabled harus boolean.');
+    patch.enabled = record.enabled ? 1 : 0;
+  }
+  if (Object.keys(patch).length === 0) return fail(c, 400, 'invalid_request', 'Tidak ada field yang diubah.');
+
+  const columns = Object.keys(patch);
+  const assignments = columns.map((column, index) => `${column} = ?${index + 2}`).join(', ');
+  await c.env.DB.prepare(
+    `UPDATE scheduled_messages SET ${assignments}, updated_at = ?${columns.length + 2} WHERE id = ?1`
+  )
+    .bind(id, ...Object.values(patch), Date.now())
+    .run();
+
+  return ok(c, { id, ...patch });
+});
+
+app.delete('/api/schedules/:id', async (c) => {
+  if (!isSameOrigin(c)) return fail(c, 403, 'csrf_failed', 'Origin permintaan tidak valid.');
+  const session = await readSession(c);
+  if (!session) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!(await sessionVersionValid(c, session))) return fail(c, 401, 'unauthorized', 'Sesi tidak valid.');
+  if (!hasValidCsrf(c, session)) return fail(c, 403, 'csrf_failed', 'Token CSRF tidak valid.');
+
+  const id = c.req.param('id');
+  const found = await findSchedule(c, id, botId(c.env));
+  if (found instanceof Response) return found;
+
+  await c.env.DB.prepare('DELETE FROM scheduled_messages WHERE id = ?1').bind(id).run();
+  return ok(c, { id, deleted: true });
+});
+
+app.get('/api/bot/schedules', async (c) => {
+  const now = Date.now();
+  const rows = await c.env.DB.prepare(
+    `SELECT s.id, s.group_jid, s.message, s.repeat_sec, s.next_run_at
+     FROM scheduled_messages s
+     JOIN groups g ON g.jid = s.group_jid AND g.bot_id = s.bot_id
+     WHERE s.bot_id = ?1 AND s.enabled = 1 AND s.next_run_at <= ?2
+     ORDER BY s.next_run_at ASC LIMIT 20`
+  )
+    .bind(botId(c.env), now)
+    .all();
+
+  return ok(c, { schedules: rows.results });
+});
+
+app.post('/api/bot/schedules/:id/executed', async (c) => {
+  const id = c.req.param('id');
+  const now = Date.now();
+  const row = await c.env.DB.prepare(
+    `SELECT id, repeat_sec FROM scheduled_messages WHERE id = ?1 AND bot_id = ?2`
+  )
+    .bind(id, botId(c.env))
+    .first<{ id: string; repeat_sec: number }>();
+  if (!row) return fail(c, 404, 'not_found', 'Jadwal tidak ditemukan.');
+
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+  if (readField(parsed.body, 'ok') === false) {
+    await c.env.DB.prepare('UPDATE scheduled_messages SET last_run_at = ?2 WHERE id = ?1')
+      .bind(id, now)
+      .run();
+    return ok(c, { id, executed_at: now, retry: true });
+  }
+
+  const nextRunAt = row.repeat_sec > 0 ? now + row.repeat_sec * 1000 : now;
+  const enabled = row.repeat_sec > 0 ? 1 : 0;
+  await c.env.DB.prepare(
+    `UPDATE scheduled_messages SET last_run_at = ?2, next_run_at = ?3, enabled = ?4, updated_at = ?2
+     WHERE id = ?1`
+  )
+    .bind(id, now, nextRunAt, enabled)
+    .run();
+
+  return ok(c, { id, executed_at: now, next_run_at: nextRunAt, enabled: enabled === 1 });
+});
+
+app.post('/api/bot/maintenance', async (c) => {
+  const parsed = await readJsonBody(c);
+  if (!parsed.ok) return parsed.response;
+
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const bot = botId(c.env);
+
+  const events = await c.env.DB.prepare('DELETE FROM events WHERE created_at < ?1')
+    .bind(now - 7 * 24 * hour)
+    .run();
+  const audit = await c.env.DB.prepare('DELETE FROM audit_log WHERE created_at < ?1')
+    .bind(now - 90 * 24 * hour)
+    .run();
+  const dailyStats = await c.env.DB.prepare('DELETE FROM daily_stats WHERE stat_date < ?1 AND bot_id = ?2')
+    .bind(new Date(now - 365 * 24 * hour).toISOString().slice(0, 10), bot)
+    .run();
+  const rateLimits = await c.env.DB.prepare('DELETE FROM rate_limits WHERE expires_at <= ?1')
+    .bind(now)
+    .run();
+  const idempotency = await c.env.DB.prepare(
+    'DELETE FROM bot_idempotency WHERE bot_id = ?1 AND expires_at <= ?2'
+  )
+    .bind(bot, now)
+    .run();
+  const mutes = await c.env.DB.prepare('DELETE FROM mutes WHERE until_at <= ?1').bind(now).run();
+
+  return ok(c, {
+    events: events.meta.changes,
+    audit: audit.meta.changes,
+    daily_stats: dailyStats.meta.changes,
+    rate_limits: rateLimits.meta.changes,
+    idempotency: idempotency.meta.changes,
+    mutes: mutes.meta.changes
+  });
+});
+
 /* --------------------------------- events ----------------------------------- */
 
 app.get('/api/events', async (c) => {
@@ -1543,9 +1810,50 @@ app.get('/api/media/:id/content', async (c) => {
 
 /* -------------------------------- pairing: bot -------------------------------- */
 
+function maskKey(c: AppContext): string {
+  const key = bearerKey(c);
+  if (!key) return 'none';
+  return `${key.slice(0, 4)}***`;
+}
+
+async function logBotRejection(c: AppContext, reason: string): Promise<void> {
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO events (id, bot_id, level, scope, message, meta, created_at)
+       VALUES (?1, ?2, 'warn', 'bot_auth', ?3, ?4, ?5)`
+    )
+      .bind(
+        `ev_${randomToken(12)}`,
+        botId(c.env),
+        `Penolakan bot: ${reason}`,
+        JSON.stringify({ key: maskKey(c), path: new URL(c.req.url).pathname }),
+        Date.now()
+      )
+      .run();
+  } catch {
+    // Log penolakan tidak boleh menggagalkan respons.
+  }
+}
+
 app.use('/api/bot/*', async (c, next) => {
   if (!isBotAuthorized(c)) {
+    await logBotRejection(c, 'bearer_invalid');
     return fail(c, 401, 'unauthorized', 'Bearer key tidak valid.');
+  }
+
+  if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+    const text = await c.req.text();
+    if (text) {
+      try {
+        const body: unknown = JSON.parse(text);
+        const claimed = readField(body, 'bot_id');
+        if (typeof claimed === 'string' && claimed !== botId(c.env)) {
+          return fail(c, 403, 'bot_scope_mismatch', 'bot_id tidak sesuai kunci.');
+        }
+      } catch {
+        // Body invalid ditolak readJsonBody di endpoint.
+      }
+    }
   }
 
   let limit: Awaited<ReturnType<typeof consumeRateLimit>>;
@@ -1556,6 +1864,7 @@ app.use('/api/bot/*', async (c, next) => {
   }
 
   if (!limit.allowed) {
+    await logBotRejection(c, 'rate_limited');
     return fail(c, 429, 'bot_rate_limited', 'Batas 120 permintaan per menit terlampaui.', {
       retry_after_seconds: Math.max(1, Math.ceil((limit.resetAt - Date.now()) / 1000))
     });
